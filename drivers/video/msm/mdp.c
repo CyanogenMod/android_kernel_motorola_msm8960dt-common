@@ -2073,7 +2073,7 @@ irqreturn_t mdp_isr(int irq, void *ptr)
 			mdp_disable_irq_nosync(MDP_VSYNC_TERM);
 			vsync_cntrl.disabled_clocks = 1;
 		} else {
-		vsync_isr_handler();
+			vsync_isr_handler();
 		}
 		spin_unlock_irqrestore(&mdp_spin_lock, flag);
 
@@ -3318,7 +3318,7 @@ void mdp_footswitch_ctrl(boolean on)
 		regulator_enable(dsi_pll_vdda);
 
 	if (on && !mdp_footswitch_on) {
-		mipi_dsi_prepare_clocks();
+		mipi_dsi_prepare_ahb_clocks();
 		mipi_dsi_ahb_ctrl(1);
 		mipi_dsi_phy_ctrl(1);
 		mipi_dsi_clk_enable();
@@ -3328,7 +3328,7 @@ void mdp_footswitch_ctrl(boolean on)
 		mipi_dsi_clk_disable();
 		mipi_dsi_phy_ctrl(0);
 		mipi_dsi_ahb_ctrl(0);
-		mipi_dsi_unprepare_clocks();
+		mipi_dsi_unprepare_ahb_clocks();
 	} else if (!on && mdp_footswitch_on) {
 		pr_debug("Disable MDP FS\n");
 		regulator_disable(footswitch);
