@@ -698,7 +698,7 @@ EXPORT_SYMBOL(jbd2_complete_transaction);
 
 int jbd2_journal_next_log_block(journal_t *journal, unsigned long long *retp)
 {
-	unsigned long blocknr;
+	unsigned long blocknr = 0;
 
 	write_lock(&journal->j_state_lock);
 	J_ASSERT(journal->j_free > 1);
