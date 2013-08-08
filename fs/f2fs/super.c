@@ -42,6 +42,7 @@ enum {
 	Opt_noacl,
 	Opt_active_logs,
 	Opt_disable_ext_identify,
+	Opt_inline_xattr,
 	Opt_android_emu,
 	Opt_err_continue,
 	Opt_err_panic,
@@ -58,6 +59,7 @@ static match_table_t f2fs_tokens = {
 	{Opt_noacl, "noacl"},
 	{Opt_active_logs, "active_logs=%u"},
 	{Opt_disable_ext_identify, "disable_ext_identify"},
+	{Opt_inline_xattr, "inline_xattr"},
 	{Opt_android_emu, "android_emu=%s"},
 	{Opt_err_continue, "errors=continue"},
 	{Opt_err_panic, "errors=panic"},
@@ -84,6 +86,148 @@ static void init_once(void *foo)
 	inode_init_once(&fi->vfs_inode);
 }
 
+static int parse_android_emu(struct f2fs_sb_info *sbi, char *args)
+{
+	char *sep = args;
+	char *sepres;
+	int ret;
+
+	if (!sep)
+		return -EINVAL;
+
+	sepres = strsep(&sep, ":");
+	if (!sep)
+		return -EINVAL;
+	ret = kstrtou32(sepres, 0, &sbi->android_emu_uid);
+	if (ret)
+		return ret;
+
+	sepres = strsep(&sep, ":");
+	if (!sep)
+		return -EINVAL;
+	ret = kstrtou32(sepres, 0, &sbi->android_emu_gid);
+	if (ret)
+		return ret;
+
+	sepres = strsep(&sep, ":");
+	ret = kstrtou16(sepres, 8, &sbi->android_emu_mode);
+	if (ret)
+		return ret;
+
+	if (sep && strstr(sep, "nocase"))
+		sbi->android_emu_flags = F2FS_ANDROID_EMU_NOCASE;
+
+	return 0;
+}
+
+static int parse_options(struct super_block *sb, char *options)
+{
+	struct f2fs_sb_info *sbi = F2FS_SB(sb);
+	substring_t args[MAX_OPT_ARGS];
+	char *p;
+	int arg = 0;
+
+	if (!options)
+		return 0;
+
+	while ((p = strsep(&options, ",")) != NULL) {
+		int token;
+		if (!*p)
+			continue;
+		/*
+		 * Initialize args struct so we know whether arg was
+		 * found; some options take optional arguments.
+		 */
+		args[0].to = args[0].from = NULL;
+		token = match_token(p, f2fs_tokens, args);
+
+		switch (token) {
+		case Opt_gc_background_off:
+			clear_opt(sbi, BG_GC);
+			break;
+		case Opt_disable_roll_forward:
+			set_opt(sbi, DISABLE_ROLL_FORWARD);
+			break;
+		case Opt_discard:
+			set_opt(sbi, DISCARD);
+			break;
+		case Opt_noheap:
+			set_opt(sbi, NOHEAP);
+			break;
+#ifdef CONFIG_F2FS_FS_XATTR
+		case Opt_nouser_xattr:
+			clear_opt(sbi, XATTR_USER);
+			break;
+		case Opt_inline_xattr:
+			set_opt(sbi, INLINE_XATTR);
+			break;
+#else
+		case Opt_nouser_xattr:
+			f2fs_msg(sb, KERN_INFO,
+				"nouser_xattr options not supported");
+			break;
+		case Opt_inline_xattr:
+			f2fs_msg(sb, KERN_INFO,
+				"inline_xattr options not supported");
+			break;
+#endif
+#ifdef CONFIG_F2FS_FS_POSIX_ACL
+		case Opt_noacl:
+			clear_opt(sbi, POSIX_ACL);
+			break;
+#else
+		case Opt_noacl:
+			f2fs_msg(sb, KERN_INFO, "noacl options not supported");
+			break;
+#endif
+		case Opt_active_logs:
+			if (args->from && match_int(args, &arg))
+				return -EINVAL;
+			if (arg != 2 && arg != 4 && arg != NR_CURSEG_TYPE)
+				return -EINVAL;
+			sbi->active_logs = arg;
+			break;
+		case Opt_disable_ext_identify:
+			set_opt(sbi, DISABLE_EXT_IDENTIFY);
+			break;
+		case Opt_err_continue:
+			clear_opt(sbi, ERRORS_RECOVER);
+			clear_opt(sbi, ERRORS_PANIC);
+			break;
+		case Opt_err_panic:
+			set_opt(sbi, ERRORS_PANIC);
+			clear_opt(sbi, ERRORS_RECOVER);
+			break;
+		case Opt_err_recover:
+			set_opt(sbi, ERRORS_RECOVER);
+			clear_opt(sbi, ERRORS_PANIC);
+			break;
+		case Opt_android_emu:
+			if (args->from) {
+				int ret;
+				char *perms = match_strdup(args);
+
+				ret = parse_android_emu(sbi, perms);
+				kfree(perms);
+
+				if (ret)
+					return -EINVAL;
+
+				set_opt(sbi, ANDROID_EMU);
+			} else
+				return -EINVAL;
+			break;
+
+		default:
+			f2fs_msg(sb, KERN_ERR,
+				"Unrecognized mount option \"%s\" or missing value",
+				p);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static struct inode *f2fs_alloc_inode(struct super_block *sb)
 {
 	struct f2fs_inode_info *fi;
@@ -102,6 +246,9 @@ static struct inode *f2fs_alloc_inode(struct super_block *sb)
 	rwlock_init(&fi->ext.ext_lock);
 
 	set_inode_flag(fi, FI_NEW_INODE);
+
+	if (test_opt(F2FS_SB(sb), INLINE_XATTR))
+		set_inode_flag(fi, FI_INLINE_XATTR);
 
 	return &fi->vfs_inode;
 }
@@ -212,33 +359,6 @@ static int f2fs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	return 0;
 }
 
-static int f2fs_remount(struct super_block *sb, int *flags, char *data)
-{
-	struct f2fs_sb_info *sbi = F2FS_SB(sb);
-	int err = 0;
-
-	lock_super(sb);
-
-	if ((*flags & MS_RDONLY) != (sb->s_flags & MS_RDONLY)) {
-		if (*flags & MS_RDONLY) {
-			sb->s_flags |= MS_RDONLY;
-
-			mutex_lock(&sbi->gc_mutex);
-			stop_gc_thread(sbi);
-			write_checkpoint(sbi, true);
-			mutex_unlock(&sbi->gc_mutex);
-
-			f2fs_msg(sb, KERN_INFO, "re-mounted read-only.");
-		} else {
-			err = -EINVAL;
-			f2fs_msg(sb, KERN_ERR, "re-mount not supported.");
-		}
-	}
-
-	unlock_super(sb);
-	return err;
-}
-
 static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(root->d_sb);
@@ -258,6 +378,8 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 		seq_puts(seq, ",user_xattr");
 	else
 		seq_puts(seq, ",nouser_xattr");
+	if (test_opt(sbi, INLINE_XATTR))
+		seq_puts(seq, ",inline_xattr");
 #endif
 #ifdef CONFIG_F2FS_FS_POSIX_ACL
 	if (test_opt(sbi, POSIX_ACL))
@@ -286,6 +408,33 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 	seq_printf(seq, ",active_logs=%u", sbi->active_logs);
 
 	return 0;
+}
+
+static int f2fs_remount(struct super_block *sb, int *flags, char *data)
+{
+	struct f2fs_sb_info *sbi = F2FS_SB(sb);
+	int err = 0;
+
+	lock_super(sb);
+
+	if ((*flags & MS_RDONLY) != (sb->s_flags & MS_RDONLY)) {
+		if (*flags & MS_RDONLY) {
+			sb->s_flags |= MS_RDONLY;
+
+			mutex_lock(&sbi->gc_mutex);
+			stop_gc_thread(sbi);
+			write_checkpoint(sbi, true);
+			mutex_unlock(&sbi->gc_mutex);
+
+			f2fs_msg(sb, KERN_INFO, "re-mounted read-only.");
+		} else {
+			err = -EINVAL;
+			f2fs_msg(sb, KERN_ERR, "re-mount not supported.");
+		}
+	}
+
+	unlock_super(sb);
+	return err;
 }
 
 static struct super_operations f2fs_sops = {
@@ -346,141 +495,6 @@ static const struct export_operations f2fs_export_ops = {
 	.fh_to_parent = f2fs_fh_to_parent,
 	.get_parent = f2fs_get_parent,
 };
-
-static int parse_android_emu(struct f2fs_sb_info *sbi, char *args)
-{
-	char *sep = args;
-	char *sepres;
-	int ret;
-
-	if (!sep)
-		return -EINVAL;
-
-	sepres = strsep(&sep, ":");
-	if (!sep)
-		return -EINVAL;
-	ret = kstrtou32(sepres, 0, &sbi->android_emu_uid);
-	if (ret)
-		return ret;
-
-	sepres = strsep(&sep, ":");
-	if (!sep)
-		return -EINVAL;
-	ret = kstrtou32(sepres, 0, &sbi->android_emu_gid);
-	if (ret)
-		return ret;
-
-	sepres = strsep(&sep, ":");
-	ret = kstrtou16(sepres, 8, &sbi->android_emu_mode);
-	if (ret)
-		return ret;
-
-	if (sep && strstr(sep, "nocase"))
-		sbi->android_emu_flags = F2FS_ANDROID_EMU_NOCASE;
-
-	return 0;
-}
-
-static int parse_options(struct super_block *sb, char *options)
-{
-	struct f2fs_sb_info *sbi = F2FS_SB(sb);
-	substring_t args[MAX_OPT_ARGS];
-	char *p;
-	int arg = 0;
-
-	if (!options)
-		return 0;
-
-	while ((p = strsep(&options, ",")) != NULL) {
-		int token;
-		if (!*p)
-			continue;
-		/*
-		 * Initialize args struct so we know whether arg was
-		 * found; some options take optional arguments.
-		 */
-		args[0].to = args[0].from = NULL;
-		token = match_token(p, f2fs_tokens, args);
-
-		switch (token) {
-		case Opt_gc_background_off:
-			clear_opt(sbi, BG_GC);
-			break;
-		case Opt_disable_roll_forward:
-			set_opt(sbi, DISABLE_ROLL_FORWARD);
-			break;
-		case Opt_discard:
-			set_opt(sbi, DISCARD);
-			break;
-		case Opt_noheap:
-			set_opt(sbi, NOHEAP);
-			break;
-#ifdef CONFIG_F2FS_FS_XATTR
-		case Opt_nouser_xattr:
-			clear_opt(sbi, XATTR_USER);
-			break;
-#else
-		case Opt_nouser_xattr:
-			f2fs_msg(sb, KERN_INFO,
-				"nouser_xattr options not supported");
-			break;
-#endif
-#ifdef CONFIG_F2FS_FS_POSIX_ACL
-		case Opt_noacl:
-			clear_opt(sbi, POSIX_ACL);
-			break;
-#else
-		case Opt_noacl:
-			f2fs_msg(sb, KERN_INFO, "noacl options not supported");
-			break;
-#endif
-		case Opt_active_logs:
-			if (args->from && match_int(args, &arg))
-				return -EINVAL;
-			if (arg != 2 && arg != 4 && arg != NR_CURSEG_TYPE)
-				return -EINVAL;
-			sbi->active_logs = arg;
-			break;
-		case Opt_disable_ext_identify:
-			set_opt(sbi, DISABLE_EXT_IDENTIFY);
-			break;
-		case Opt_err_continue:
-			clear_opt(sbi, ERRORS_RECOVER);
-			clear_opt(sbi, ERRORS_PANIC);
-			break;
-		case Opt_err_panic:
-			set_opt(sbi, ERRORS_PANIC);
-			clear_opt(sbi, ERRORS_RECOVER);
-			break;
-		case Opt_err_recover:
-			set_opt(sbi, ERRORS_RECOVER);
-			clear_opt(sbi, ERRORS_PANIC);
-			break;
-		case Opt_android_emu:
-			if (args->from) {
-				int ret;
-				char *perms = match_strdup(args);
-
-				ret = parse_android_emu(sbi, perms);
-				kfree(perms);
-
-				if (ret)
-					return -EINVAL;
-
-				set_opt(sbi, ANDROID_EMU);
-			} else
-				return -EINVAL;
-			break;
-
-		default:
-			f2fs_msg(sb, KERN_ERR,
-				"Unrecognized mount option \"%s\" or missing value",
-				p);
-			return -EINVAL;
-		}
-	}
-	return 0;
-}
 
 static loff_t max_file_size(unsigned bits)
 {
