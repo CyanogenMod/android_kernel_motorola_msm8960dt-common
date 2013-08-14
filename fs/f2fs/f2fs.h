@@ -985,6 +985,22 @@ static inline unsigned int addrs_per_inode(struct f2fs_inode_info *fi)
 	return DEF_ADDRS_PER_INODE;
 }
 
+static inline void *inline_xattr_addr(struct page *page)
+{
+	struct f2fs_inode *ri;
+	ri = (struct f2fs_inode *)page_address(page);
+	return (void *)&(ri->i_addr[DEF_ADDRS_PER_INODE -
+					F2FS_INLINE_XATTR_ADDRS]);
+}
+
+static inline int inline_xattr_size(struct inode *inode)
+{
+	if (is_inode_flag_set(F2FS_I(inode), FI_INLINE_XATTR))
+		return F2FS_INLINE_XATTR_ADDRS << 2;
+	else
+		return 0;
+}
+
 int f2fs_android_emu(struct f2fs_sb_info *, struct inode *, u32 *, u32 *,
 		umode_t *);
 
