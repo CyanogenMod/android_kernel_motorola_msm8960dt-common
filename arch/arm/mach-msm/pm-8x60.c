@@ -524,10 +524,6 @@ static bool __ref msm_pm_spm_power_collapse(
 	void *entry;
 	bool collapsed = 0;
 	int ret;
-	unsigned int saved_gic_cpu_ctrl;
-
-	saved_gic_cpu_ctrl = readl_relaxed(MSM_QGIC_CPU_BASE + GIC_CPU_CTRL);
-	mb();
 
 	if (MSM_PM_DEBUG_POWER_COLLAPSE & msm_pm_debug_mask)
 		pr_info("CPU%u: %s: notify_rpm %d\n",
@@ -558,9 +554,7 @@ static bool __ref msm_pm_spm_power_collapse(
 #endif
 		cpu_init();
 		writel(0xF0, MSM_QGIC_CPU_BASE + GIC_CPU_PRIMASK);
-		writel_relaxed(saved_gic_cpu_ctrl,
-				MSM_QGIC_CPU_BASE + GIC_CPU_CTRL);
-		mb();
+		writel(1, MSM_QGIC_CPU_BASE + GIC_CPU_CTRL);
 		local_fiq_enable();
 	}
 
