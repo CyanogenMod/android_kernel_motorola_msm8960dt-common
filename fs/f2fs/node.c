@@ -693,6 +693,8 @@ int truncate_inode_blocks(struct inode *inode, pgoff_t from)
 	struct dnode_of_data dn;
 	struct page *page;
 
+	noffset[1] = 0;
+
 	trace_f2fs_truncate_inode_blocks_enter(inode, from);
 
 	level = get_node_path(from, offset, noffset);
