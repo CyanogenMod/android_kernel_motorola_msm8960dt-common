@@ -39,6 +39,11 @@
 #include "ion_priv.h"
 #define DEBUG
 
+/* The number of times we should retry the dumping of the debug buffers
+ * before simply skipping the problem client
+ */
+#define ION_DEBUG_LOCK_RETRIES     5
+
 /**
  * struct ion_device - the metadata of the ion device node
  * @dev:		the actual misc device
@@ -191,12 +196,14 @@ static struct ion_iommu_map *ion_iommu_lookup(struct ion_buffer *buffer,
 /* this function should only be called while dev->lock is held */
 static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 				     struct ion_device *dev,
+				     const char *alloc_client_name,
 				     unsigned long len,
 				     unsigned long align,
 				     unsigned long flags)
 {
 	struct ion_buffer *buffer;
 	struct sg_table *table;
+	unsigned int name_len;
 	int ret;
 
 	buffer = kzalloc(sizeof(struct ion_buffer), GFP_KERNEL);
@@ -215,6 +222,12 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	buffer->dev = dev;
 	buffer->size = len;
 	buffer->flags = flags;
+
+	name_len = strnlen(alloc_client_name, 64);
+	buffer->alloc_client_name = kzalloc(name_len+1, GFP_KERNEL);
+	if (buffer->alloc_client_name)
+		strlcpy(buffer->alloc_client_name,
+			alloc_client_name, name_len+1);
 
 	table = buffer->heap->ops->map_dma(buffer->heap, buffer);
 	if (IS_ERR_OR_NULL(table)) {
@@ -276,6 +289,7 @@ static void ion_buffer_destroy(struct kref *kref)
 	mutex_lock(&dev->lock);
 	rb_erase(&buffer->node, &dev->buffers);
 	mutex_unlock(&dev->lock);
+	kfree(buffer->alloc_client_name);
 	kfree(buffer);
 }
 
@@ -433,7 +447,8 @@ struct ion_handle *ion_alloc(struct ion_client *client, size_t len,
 		if (secure_allocation &&
 			(heap->type != (enum ion_heap_type) ION_HEAP_TYPE_CP))
 			continue;
-		buffer = ion_buffer_create(heap, dev, len, align, flags);
+		buffer = ion_buffer_create(heap, dev,
+					   client->name, len, align, flags);
 		if (!IS_ERR_OR_NULL(buffer))
 			break;
 		if (dbg_str_idx < MAX_DBG_STR_LEN) {
@@ -1439,13 +1454,15 @@ static const struct file_operations ion_fops = {
 	.unlocked_ioctl = ion_ioctl,
 };
 
-static size_t ion_debug_heap_total(struct ion_client *client,
+static ssize_t ion_debug_heap_total(struct ion_client *client,
 				   enum ion_heap_ids id)
 {
-	size_t size = 0;
+	ssize_t size = 0;
 	struct rb_node *n;
 
-	mutex_lock(&client->lock);
+	if (!mutex_trylock(&client->lock))
+		return -EBUSY;
+
 	for (n = rb_first(&client->handles); n; n = rb_next(n)) {
 		struct ion_handle *handle = rb_entry(n,
 						     struct ion_handle,
@@ -1600,6 +1617,12 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 	struct ion_heap *heap = s->private;
 	struct ion_device *dev = heap->dev;
 	struct rb_node *n;
+	unsigned retries = 0;
+
+retry:
+	/* If we are re-trying, reset the seq_file buffer.... */
+	if (retries)
+		s->count = 0;
 
 	mutex_lock(&dev->lock);
 	seq_printf(s, "%16.s %16.s %16.s\n", "client", "pid", "size");
@@ -1607,7 +1630,17 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 	for (n = rb_first(&dev->clients); n; n = rb_next(n)) {
 		struct ion_client *client = rb_entry(n, struct ion_client,
 						     node);
-		size_t size = ion_debug_heap_total(client, heap->id);
+		ssize_t size = ion_debug_heap_total(client, heap->id);
+
+		if (size < 0) {
+			if (retries++ >= ION_DEBUG_LOCK_RETRIES) {
+				seq_printf(s, "Couldn't get client lock...\n");
+				continue;
+			}
+			mutex_unlock(&dev->lock);
+			goto retry;
+		}
+
 		if (!size)
 			continue;
 		if (client->task) {
@@ -1735,6 +1768,12 @@ static int ion_debug_leak_show(struct seq_file *s, void *unused)
 	struct ion_device *dev = s->private;
 	struct rb_node *n;
 	struct rb_node *n2;
+	unsigned retries = 0;
+
+retry:
+	/* If we are re-trying, reset the seq_file buffer.... */
+	if (retries)
+		s->count = 0;
 
 	/* mark all buffers as 1 */
 	seq_printf(s, "%16.s %16.s %16.s %16.s\n", "buffer", "heap", "size",
@@ -1752,7 +1791,15 @@ static int ion_debug_leak_show(struct seq_file *s, void *unused)
 		struct ion_client *client = rb_entry(n, struct ion_client,
 						     node);
 
-		mutex_lock(&client->lock);
+		if (!mutex_trylock(&client->lock)) {
+			if (retries++ >= ION_DEBUG_LOCK_RETRIES) {
+				seq_printf(s, "Couldn't get client lock...\n");
+				continue;
+			}
+			mutex_unlock(&dev->lock);
+			goto retry;
+		}
+
 		for (n2 = rb_first(&client->handles); n2; n2 = rb_next(n2)) {
 			struct ion_handle *handle = rb_entry(n2,
 						struct ion_handle, node);
@@ -1790,6 +1837,69 @@ static const struct file_operations debug_leak_fops = {
 	.release = single_release,
 };
 
+static int ion_debug_allbufs_show(struct seq_file *s, void *unused)
+{
+	struct ion_device *dev = s->private;
+	struct rb_node *n;
+
+	seq_printf(s, "%16.s %12.s %12.s %12.s %20.s    %s\n", "heap",
+		"buffer", "size", "ref cnt", "allocator", "references");
+
+	mutex_lock(&dev->lock);
+	for (n = rb_first(&dev->buffers); n; n = rb_next(n)) {
+		struct rb_node *j;
+		struct ion_buffer *buf = rb_entry(n, struct ion_buffer, node);
+		int buf_refcount = atomic_read(&buf->ref.refcount);
+		int refs_found = 0;
+		int clients_busy = 0;
+
+		seq_printf(s, "%16.s %12.x %12.x %12.d %20.s    %s",
+			buf->heap->name, (int)buf, buf->size, buf_refcount,
+			buf->alloc_client_name, "");
+
+		for (j = rb_first(&dev->clients); j; j = rb_next(j)) {
+			struct ion_client *entry = rb_entry(j,
+							    struct ion_client,
+							    node);
+			struct ion_handle *handle;
+
+			if (!mutex_trylock(&entry->lock)) {
+				clients_busy++;
+				continue;
+			}
+			handle = ion_handle_lookup(entry, buf);
+			if (handle) {
+				seq_printf(s, "%s, ", entry->name);
+				refs_found++;
+			}
+			mutex_unlock(&entry->lock);
+		}
+		if (refs_found != buf_refcount) {
+			if (!clients_busy)
+				seq_printf(s, "missing x %d",
+					(buf_refcount-refs_found));
+			else
+				seq_printf(s,
+					"!!!some clients were busy!!!");
+		}
+
+		seq_printf(s, "\n");
+	}
+	mutex_unlock(&dev->lock);
+	return 0;
+}
+
+static int ion_debug_allbufs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ion_debug_allbufs_show, inode->i_private);
+}
+
+static const struct file_operations debug_allbufs_fops = {
+	.open = ion_debug_allbufs_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 
 
 struct ion_device *ion_device_create(long (*custom_ioctl)
@@ -1825,6 +1935,8 @@ struct ion_device *ion_device_create(long (*custom_ioctl)
 	idev->clients = RB_ROOT;
 	debugfs_create_file("check_leaked_fds", 0664, idev->debug_root, idev,
 			    &debug_leak_fops);
+	debugfs_create_file("check_all_bufs", 0664, idev->debug_root, idev,
+			    &debug_allbufs_fops);
 	return idev;
 }
 

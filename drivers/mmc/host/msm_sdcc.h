@@ -2,7 +2,7 @@
  *  linux/drivers/mmc/host/msmsdcc.h - QCT MSM7K SDC Controller
  *
  *  Copyright (C) 2008 Google, All Rights Reserved.
- *  Copyright (c) 2009-2012, The Linux Foundation. All rights reserved.
+ *  Copyright (c) 2009-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -25,7 +25,6 @@
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
 #include <linux/wakelock.h>
-#include <linux/earlysuspend.h>
 #include <linux/pm_qos.h>
 #include <mach/sps.h>
 
@@ -216,8 +215,8 @@
 #define MSM_MMC_DEFAULT_IDLE_TIMEOUT	5000 /* msecs */
 #define MSM_MMC_CLK_GATE_DELAY	200 /* msecs */
 
-/* Set the request timeout to 10secs */
-#define MSM_MMC_REQ_TIMEOUT	10000 /* msecs */
+/* Set the request timeout to 8secs */
+#define MSM_MMC_REQ_TIMEOUT	8000 /* msecs */
 
 /*
  * Controller HW limitations
@@ -371,11 +370,6 @@ struct msmsdcc_host {
 	struct msmsdcc_dma_data	dma;
 	struct msmsdcc_sps_data sps;
 	struct msmsdcc_pio_data	pio;
-
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	struct early_suspend early_suspend;
-	int polling_enabled;
-#endif
 
 	struct tasklet_struct 	dma_tlet;
 

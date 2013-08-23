@@ -404,7 +404,7 @@ static int kgsl_suspend_device(struct kgsl_device *device, pm_message_t state)
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_SUSPEND);
 	/* Make sure no user process is waiting for a timestamp *
 	 * before supending */
-	if (device->active_cnt != 0) {
+	if (device->state == KGSL_STATE_ACTIVE && device->active_cnt != 0) {
 		mutex_unlock(&device->mutex);
 		wait_for_completion(&device->suspend_gate);
 		mutex_lock(&device->mutex);
@@ -2362,6 +2362,9 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	/* Initalize the snapshot engine */
 	kgsl_device_snapshot_init(device);
 
+	/* Initialize the postmortem sysfs engine */
+	kgsl_device_postmortem_init(device);
+
 	/* Initialize common sysfs entries */
 	kgsl_pwrctrl_init_sysfs(device);
 
@@ -2401,6 +2404,12 @@ int kgsl_postmortem_dump(struct kgsl_device *device, int manual)
 		if (device->state == KGSL_STATE_ACTIVE)
 			kgsl_idle(device);
 
+	}
+
+	if (device->postmortem_dump != NULL && device->postmortem_size > 0) {
+		/* Clear the sysfs buffer of previous postmortem */
+		memset(device->postmortem_dump, 0, device->postmortem_size);
+		device->postmortem_pos = 0;
 	}
 
 	if (device->pm_dump_enable) {
@@ -2456,6 +2465,7 @@ EXPORT_SYMBOL(kgsl_postmortem_dump);
 
 void kgsl_device_platform_remove(struct kgsl_device *device)
 {
+	kgsl_device_postmortem_close(device);
 	kgsl_device_snapshot_close(device);
 
 	kgsl_cffdump_close(device->id);

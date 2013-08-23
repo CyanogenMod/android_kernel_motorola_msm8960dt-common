@@ -2044,7 +2044,7 @@ irqreturn_t mdp_isr(int irq, void *ptr)
 			mdp_disable_irq_nosync(MDP_VSYNC_TERM);
 			vsync_cntrl.disabled_clocks = 1;
 		} else {
-			vsync_isr_handler();
+		vsync_isr_handler();
 		}
 		spin_unlock_irqrestore(&mdp_spin_lock, flag);
 
@@ -2396,11 +2396,15 @@ static int mdp_on(struct platform_device *pdev)
 
 	if (!(mfd->cont_splash_done)) {
 		if (mfd->panel.type == MIPI_VIDEO_PANEL)
-			mdp4_dsi_video_splash_done();
+			mdp4_dsi_video_splash_done(pdev);
 
 		/* Clks are enabled in probe.
 		Disabling clocks now */
+		cont_splash_clk_ctrl(0);
 		mdp_clk_ctrl(0);
+		if (mfd->panel.type == MIPI_VIDEO_PANEL ||
+                                    mfd->panel.type == LCDC_PANEL)
+			mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
 		mfd->cont_splash_done = 1;
 	}
 
@@ -2438,12 +2442,18 @@ static int mdp_on(struct platform_device *pdev)
 		atomic_set(&vsync_cntrl.suspend, 1);
 	}
 
+	if (ret)
+		pr_err("%s: ret = %d\n", __func__, ret);
+
 	mdp_histogram_ctrl_all(TRUE);
 
 	if (ret == 0)
 		ret = panel_next_late_init(pdev);
 
 	pr_debug("%s:-\n", __func__);
+
+	if (ret)
+		pr_err("%s: returning ret = %d\n", __func__, ret);
 
 	return ret;
 }
@@ -2776,6 +2786,8 @@ static int mdp_probe(struct platform_device *pdev)
 		if (rc)
 			return rc;
 
+		mdp_clk_ctrl(1);
+
 		mdp_hw_version();
 
 		/* initializing mdp hw */
@@ -2789,6 +2801,10 @@ static int mdp_probe(struct platform_device *pdev)
 #ifdef CONFIG_FB_MSM_OVERLAY
 		mdp_hw_cursor_init();
 #endif
+		/* Don't turn off clk until splash done */
+		if (!(mdp_pdata->cont_splash_enabled))
+			mdp_clk_ctrl(0);
+
 		mdp_resource_initialized = 1;
 		return 0;
 	}
@@ -2853,8 +2869,6 @@ static int mdp_probe(struct platform_device *pdev)
 			/*read panel wxh and calculate splash screen
 			  size*/
 			mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
-
-			mdp_clk_ctrl(1);
 
 			mdp_pdata->splash_screen_size =
 				inpdw(MDP_BASE + 0x90004);
@@ -3015,6 +3029,9 @@ static int mdp_probe(struct platform_device *pdev)
 		}
 
 #endif
+		mfd->reg_write = mipi_reg_write;
+		mfd->reg_read = mipi_reg_read;
+
 		if (mdp_rev >= MDP_REV_40)
 			mfd->cursor_update = mdp_hw_cursor_sync_update;
 		else
@@ -3057,6 +3074,9 @@ static int mdp_probe(struct platform_device *pdev)
 		INIT_WORK(&mfd->dma_update_worker,
 			mdp_lcd_update_workqueue_handler);
 #endif
+		mfd->reg_write = mipi_reg_write;
+		mfd->reg_read = mipi_reg_read;
+
 		mdp_config_vsync(mdp_init_pdev, mfd);
 		break;
 #endif
@@ -3228,6 +3248,9 @@ static int mdp_probe(struct platform_device *pdev)
 			mfd->vsync_sysfs_created = 1;
 		}
 	}
+
+	mdp4_hang_init();
+
 	return 0;
 
       mdp_probe_err:
@@ -3256,25 +3279,23 @@ void mdp_footswitch_ctrl(boolean on)
 	if (dsi_pll_vdda)
 		regulator_enable(dsi_pll_vdda);
 
-	mipi_dsi_prepare_clocks();
-	mipi_dsi_ahb_ctrl(1);
-	mipi_dsi_phy_ctrl(1);
-	mipi_dsi_clk_enable();
-
 	if (on && !mdp_footswitch_on) {
+		mipi_dsi_prepare_clocks();
+		mipi_dsi_ahb_ctrl(1);
+		mipi_dsi_phy_ctrl(1);
+		mipi_dsi_clk_enable();
 		pr_debug("Enable MDP FS\n");
 		regulator_enable(footswitch);
 		mdp_footswitch_on = 1;
+		mipi_dsi_clk_disable();
+		mipi_dsi_phy_ctrl(0);
+		mipi_dsi_ahb_ctrl(0);
+		mipi_dsi_unprepare_clocks();
 	} else if (!on && mdp_footswitch_on) {
 		pr_debug("Disable MDP FS\n");
 		regulator_disable(footswitch);
 		mdp_footswitch_on = 0;
 	}
-
-	mipi_dsi_clk_disable();
-	mipi_dsi_phy_ctrl(0);
-	mipi_dsi_ahb_ctrl(0);
-	mipi_dsi_unprepare_clocks();
 
 	if (dsi_pll_vdda)
 		regulator_disable(dsi_pll_vdda);

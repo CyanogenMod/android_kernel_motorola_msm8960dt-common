@@ -275,6 +275,8 @@ static struct kernel_param_ops module_ops = {
 module_param_cb(enabled, &module_ops, &enabled, 0644);
 MODULE_PARM_DESC(enabled, "enforce thermal limit on cpu");
 
+static int virtual_sensor0 = -EINVAL;
+module_param(virtual_sensor0, int, 0644);
 
 /* Call with core_control_mutex locked */
 static int __cpuinit update_offline_cores(int val)

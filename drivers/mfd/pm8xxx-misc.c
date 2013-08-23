@@ -43,6 +43,9 @@
 #define REG_PM8018_PON_CNTL_5			0x01F
 #define REG_PM8921_PON_CNTL_5			0x01F
 
+#define PON_CTRL_4_DEBOUNCE_T_MASK		0xF0
+#define PON_CTRL_4_DEBOUNCE_T_SHIFT		4
+
 #define PON_CTRL_4_RESET_EN_MASK		0x01
 #define PON_CTRL_4_SHUTDOWN_ON_RESET		0x0
 #define PON_CTRL_4_RESTART_ON_RESET		0x1
@@ -347,11 +350,16 @@ static int __pm8018_reset_pwr_off(struct pm8xxx_misc_chip *chip, int reset)
 	 * Select action to perform (reset or shutdown) when PS_HOLD goes low.
 	 * Also ensure that KPD, CBL0, and CBL1 pull ups are enabled and that
 	 * USB charging is enabled.
+	 *
+	 * Do not set PON_CTRL_1_USB_PWR_EN if we want to shutdown.
+	 * This does not really work if BPLUS is on, but we may want this
+	 * for the case where bare board is powered entirely from VBUS
+	 * using a "factory cable".
 	 */
 	rc = pm8xxx_misc_masked_write(chip, REG_PM8XXX_PON_CTRL_1,
 		PON_CTRL_1_PULL_UP_MASK | PON_CTRL_1_USB_PWR_EN
 		| PON_CTRL_1_WD_EN_MASK,
-		PON_CTRL_1_PULL_UP_MASK | PON_CTRL_1_USB_PWR_EN
+		PON_CTRL_1_PULL_UP_MASK | (reset ? PON_CTRL_1_USB_PWR_EN : 0)
 		| (reset ? PON_CTRL_1_WD_EN_RESET : PON_CTRL_1_WD_EN_PWR_OFF));
 	if (rc)
 		pr_err("pm8xxx_misc_masked_write failed, rc=%d\n", rc);
@@ -528,6 +536,58 @@ int pm8xxx_reset_pwr_off(int reset)
 	return rc;
 }
 EXPORT_SYMBOL_GPL(pm8xxx_reset_pwr_off);
+
+static int __pm8921_hw_reset_debounce_timer_set(struct pm8xxx_misc_chip *chip,
+						unsigned char val)
+{
+	int rc;
+
+	rc = pm8xxx_misc_masked_write(chip, REG_PM8921_PON_CNTL_4,
+	       PON_CTRL_4_DEBOUNCE_T_MASK,
+	       val << PON_CTRL_4_DEBOUNCE_T_SHIFT);
+
+	if (rc)
+		pr_err("pm8xxx_misc_masked_write failed, rc=%d\n", rc);
+
+	return rc;
+}
+
+/**
+ * pm8xxx_hw_reset_debounce_timer_set - set PM8XXX hardware reset debounce
+ *                                      timer
+ * @val: 0~15, representing different timer values
+ *
+ * RETURNS: an appropriate -ERRNO error value on error, or zero for success.
+ */
+int pm8xxx_hw_reset_debounce_timer_set(unsigned char val)
+{
+	struct pm8xxx_misc_chip *chip;
+	unsigned long flags;
+	int rc = 0;
+
+	spin_lock_irqsave(&pm8xxx_misc_chips_lock, flags);
+
+	/* Loop over all attached PMICs and call specific functions for them. */
+	list_for_each_entry(chip, &pm8xxx_misc_chips, link) {
+		switch (chip->version) {
+		case PM8XXX_VERSION_8921:
+			rc = __pm8921_hw_reset_debounce_timer_set(chip, val);
+			break;
+		default:
+			break;
+		}
+		if (rc) {
+			pr_err("pm8xxx_hw_reset_debounce_timer_set failed,"
+			       " rc=%d\n", rc);
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&pm8xxx_misc_chips_lock, flags);
+
+	return rc;
+}
+EXPORT_SYMBOL_GPL(pm8xxx_hw_reset_debounce_timer_set);
 
 /**
  * pm8xxx_smpl_control - enables/disables SMPL detection

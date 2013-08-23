@@ -57,11 +57,12 @@ static int ssr_magic_number = 0;
 static int restart_mode;
 void *restart_reason;
 
+struct work_struct msm_resout_work;
 int pmic_reset_irq;
 static void __iomem *msm_tmr0_base;
 
-#ifdef CONFIG_MSM_DLOAD_MODE
 static int in_panic;
+#ifdef CONFIG_MSM_DLOAD_MODE
 static void *dload_mode_addr;
 
 /* Download mode master kill-switch */
@@ -69,7 +70,7 @@ static int dload_set(const char *val, struct kernel_param *kp);
 static int download_mode = 1;
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
-
+#endif
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
@@ -80,7 +81,7 @@ static int panic_prep_restart(struct notifier_block *this,
 static struct notifier_block panic_blk = {
 	.notifier_call	= panic_prep_restart,
 };
-
+#ifdef CONFIG_MSM_DLOAD_MODE
 static void set_dload_mode(int on)
 {
 	if (dload_mode_addr) {
@@ -182,9 +183,33 @@ static void cpu_power_off(void *data)
 		;
 }
 
-static irqreturn_t resout_irq_handler(int irq, void *dev_id)
+#define REBOOT_FASTBOOT     0x77665500
+#define REBOOT_NORMAL       0x77665501
+#define REBOOT_RECOVERY     0x77665502
+#define REBOOT_MBM_MISMATCH 0x77665503
+#define REBOOT_OUT_OF_COM   0x77665504
+#define REBOOT_AP_PANIC     0x77665505
+#define REBOOT_HARD_RESET   0x7766550B
+
+#define REBOOT_MIN          0x77665500
+#define REBOOT_MAX          0x7766550D
+static void set_restart_reason(unsigned reason)
 {
-	pr_warn("%s PMIC Initiated shutdown\n", __func__);
+	__raw_writel(reason, restart_reason);
+
+	/* Because IMEM is not reliable on MSM8960Pro, store restart reason
+	 * to pmic also */
+	if (!cpu_is_msm8960() &&
+	    (reason >= REBOOT_MIN) && (reason <= REBOOT_MAX))
+		pm8xxx_hw_reset_debounce_timer_set(reason - REBOOT_MIN + 1);
+}
+
+struct work_struct msm_resout_work;
+
+static void msm_resout_work_fn(struct work_struct *work)
+{
+	/* Halt the kernel before HW reset */
+	kernel_halt();
 	oops_in_progress = 1;
 	smp_call_function_many(cpu_online_mask, cpu_power_off, NULL, 0);
 	if (smp_processor_id() == 0)
@@ -192,6 +217,17 @@ static irqreturn_t resout_irq_handler(int irq, void *dev_id)
 	preempt_disable();
 	while (1)
 		;
+}
+
+static irqreturn_t resout_irq_handler(int irq, void *dev_id)
+{
+	pr_warn("%s External HW Initiated reboot\n", __func__);
+	set_restart_reason(REBOOT_HARD_RESET);
+	pr_warn("%s 2 sec to reboot.Halt the kernel.\n", __func__);
+	pet_watchdog();
+	set_dload_mode(0);
+	schedule_work(&msm_resout_work);
+
 	return IRQ_HANDLED;
 }
 
@@ -263,18 +299,24 @@ void msm_restart(char mode, const char *cmd)
 
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
-			__raw_writel(0x77665500, restart_reason);
+			set_restart_reason(REBOOT_FASTBOOT);
 		} else if (!strncmp(cmd, "recovery", 8)) {
-			__raw_writel(0x77665502, restart_reason);
+			set_restart_reason(REBOOT_RECOVERY);
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			code = simple_strtoul(cmd + 4, NULL, 16) & 0xff;
 			__raw_writel(0x6f656d00 | code, restart_reason);
+		} else if (!strncmp(cmd, "outofcharge", 11)) {
+			set_restart_reason(REBOOT_OUT_OF_COM);
+		} else if (!strncmp(cmd, "mbmprotocol_ver_mismatch", 24)) {
+			set_restart_reason(REBOOT_MBM_MISMATCH);
 		} else {
-			__raw_writel(0x77665501, restart_reason);
+			set_restart_reason(REBOOT_NORMAL);
 		}
+	} else if (in_panic == 1) {
+		set_restart_reason(REBOOT_AP_PANIC);
 	} else {
-		__raw_writel(0x77665501, restart_reason);
+		set_restart_reason(REBOOT_NORMAL);
 	}
 #ifdef CONFIG_LGE_CRASH_HANDLER
 	if (in_panic == 1)
@@ -289,6 +331,7 @@ reset:
 		mdelay(5000);
 		pr_notice("PS_HOLD didn't work, falling back to watchdog\n");
 	}
+	__raw_writel(0, restart_reason);
 
 	__raw_writel(1, msm_tmr0_base + WDT0_RST);
 	__raw_writel(5*0x31F3, msm_tmr0_base + WDT0_BARK_TIME);
@@ -324,8 +367,8 @@ late_initcall(msm_pmic_restart_init);
 
 static int __init msm_restart_init(void)
 {
-#ifdef CONFIG_MSM_DLOAD_MODE
 	atomic_notifier_chain_register(&panic_notifier_list, &panic_blk);
+#ifdef CONFIG_MSM_DLOAD_MODE
 	dload_mode_addr = MSM_IMEM_BASE + DLOAD_MODE_ADDR;
 #ifdef CONFIG_LGE_CRASH_HANDLER
 	lge_error_handler_cookie_addr = MSM_IMEM_BASE +
@@ -336,6 +379,7 @@ static int __init msm_restart_init(void)
 	msm_tmr0_base = msm_timer_get_timer0_base();
 	restart_reason = MSM_IMEM_BASE + RESTART_REASON_ADDR;
 	pm_power_off = msm_power_off;
+	INIT_WORK(&msm_resout_work, msm_resout_work_fn);
 
 	return 0;
 }

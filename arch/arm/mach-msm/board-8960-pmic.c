@@ -176,6 +176,8 @@ static struct pm8xxx_adc_amux pm8xxx_adc_channels_data[] = {
 		ADC_DECIMATION_TYPE2, ADC_SCALE_XOTHERM},
 	{"pa_therm0", ADC_MPP_1_AMUX3, CHAN_PATH_SCALING1, AMUX_RSV1,
 		ADC_DECIMATION_TYPE2, ADC_SCALE_PA_THERM},
+	{"vreg_s3", ADC_MPP_1_AMUX4 , CHAN_PATH_SCALING1, AMUX_RSV1,
+		ADC_DECIMATION_TYPE2, ADC_SCALE_DEFAULT},
 };
 
 static struct pm8xxx_adc_properties pm8xxx_adc_data = {
@@ -600,6 +602,12 @@ void __init msm8960_init_pmic(void)
 	msm8960_device_ssbi_pmic.dev.platform_data =
 				&msm8960_ssbi_pm8921_pdata;
 	pm8921_platform_data.num_regulators = msm_pm8921_regulator_pdata_len;
+
+	if (msm8960_oem_funcs.msm_pmic_init) {
+		msm8960_oem_funcs.msm_pmic_init(&msm8960_oem_funcs,
+						&pm8921_platform_data);
+		return;
+	}
 
 	if (machine_is_msm8960_liquid()) {
 		pm8921_platform_data.keypad_pdata = &keypad_data_liquid;

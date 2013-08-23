@@ -22,6 +22,7 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
+#include <linux/of_gpio.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
@@ -194,9 +195,7 @@ static irqreturn_t
 qup_i2c_interrupt(int irq, void *devid)
 {
 	struct qup_i2c_dev *dev = devid;
-	uint32_t status = 0;
-	uint32_t status1 = 0;
-	uint32_t op_flgs = 0;
+	uint32_t status, status1, op_flgs;
 	int err = 0;
 
 	if (pm_runtime_suspended(dev->dev))
@@ -1001,7 +1000,7 @@ timeout_err:
 				} else if (dev->err < 0) {
 					dev_err(dev->dev,
 					"QUP data xfer error %d\n", dev->err);
-					ret = dev->err;
+					ret = -EIO;
 					goto out_err;
 				} else if (dev->err > 0) {
 					/*
@@ -1012,7 +1011,7 @@ timeout_err:
 					 */
 					qup_i2c_recover_bus_busy(dev);
 				}
-				ret = -dev->err;
+				ret = -EBUSY;
 				goto out_err;
 			}
 			if (dev->msg->flags & I2C_M_RD) {
@@ -1107,14 +1106,14 @@ qup_i2c_probe(struct platform_device *pdev)
 	struct resource		*in_irq, *out_irq, *err_irq;
 	struct clk         *clk, *pclk;
 	int ret = 0;
-	int i;
+	int i, gpio = -1;
 	struct msm_i2c_platform_data *pdata;
+	struct device_node *node = pdev->dev.of_node;
 
 	gsbi_mem = NULL;
 	dev_dbg(&pdev->dev, "qup_i2c_probe\n");
 
-	if (pdev->dev.of_node) {
-		struct device_node *node = pdev->dev.of_node;
+	if (node) {
 		pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
 		if (!pdata)
 			return -ENOMEM;
@@ -1247,9 +1246,17 @@ blsp_core_init:
 	}
 
 	for (i = 0; i < ARRAY_SIZE(i2c_rsrcs); ++i) {
-		res = platform_get_resource_byname(pdev, IORESOURCE_IO,
-						   i2c_rsrcs[i]);
-		dev->i2c_gpios[i] = res ? res->start : -1;
+		if (node) {
+			gpio = of_get_gpio(node, i);
+			if (!gpio_is_valid(gpio))
+				dev->i2c_gpios[i] = -1;
+			else
+				dev->i2c_gpios[i] = gpio;
+		} else {
+			res = platform_get_resource_byname(pdev, IORESOURCE_IO,
+							   i2c_rsrcs[i]);
+			dev->i2c_gpios[i] = res ? res->start : -1;
+		}
 	}
 
 	platform_set_drvdata(pdev, dev);
@@ -1272,7 +1279,8 @@ blsp_core_init:
 	clk_prepare_enable(dev->clk);
 	clk_prepare_enable(dev->pclk);
 	writel_relaxed(1, dev->base + QUP_SW_RESET);
-	if (qup_i2c_poll_state(dev, 0, true) != 0)
+	ret = qup_i2c_poll_state(dev, 0, true);
+	if (ret)
 		goto err_reset_failed;
 	clk_disable_unprepare(dev->clk);
 	clk_disable_unprepare(dev->pclk);

@@ -146,6 +146,16 @@ config LEDS_PCA9532_GPIO
 	  To use a pin as gpio pca9532_type in pca9532_platform data needs to
 	  set to PCA9532_TYPE_GPIO.
 
+config LEDS_LM3556
+	  tristate "LM3556 driver"
+	  depends on LEDS_CLASS && I2C
+	help
+	 This option enables support for the LM3556 LED controller. LM3556 is
+	 a fixed frequency synchronous Boost flash driver, can be used as Camera
+	 Flash, Torch, Message Indicator.
+	 This Driver provides direct control via LED class and interface for
+	 programming the controller.
+
 config LEDS_GPIO
 	tristate "LED Support for GPIO connected LEDs"
 	depends on LEDS_CLASS
@@ -355,6 +365,19 @@ config LEDS_PWM
 	depends on HAVE_PWM
 	help
 	  This option enables support for pwm driven LEDs
+
+config LEDS_PM8XXX_RGB
+	tristate "Support for PMIC breathing RGB LED"
+	depends on LEDS_CLASS
+	help
+	 This option enables support for PMIC breathing RGB LED
+
+config LEDS_PM8XXX_EXT_CTRL
+	tristate "Extended control for PM8XXX charging LED"
+	depends on LEDS_CLASS
+	depends on LEDS_PM8XXX
+	help
+	 This option enables extended control for charging LED
 
 config LEDS_REGULATOR
 	tristate "REGULATOR driven LED support"

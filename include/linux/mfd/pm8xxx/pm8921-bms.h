@@ -15,9 +15,9 @@
 
 #include <linux/errno.h>
 #include <linux/mfd/pm8xxx/batterydata-lib.h>
+#include <linux/types.h>
 
 #define PM8921_BMS_DEV_NAME	"pm8921-bms"
-
 
 struct pm8xxx_bms_core_data {
 	unsigned int	batt_temp_channel;
@@ -44,6 +44,8 @@ struct pm8xxx_bms_core_data {
  * @disable_flat_portion_ocv:	feature to disable ocv updates while in sleep
  * @ocv_dis_high_soc:		the high soc percent when ocv should be disabled
  * @ocv_dis_low_soc:		the low soc percent when ocv should be enabled
+ * @get_batt_info:	a board specific function to return battery data If NULL
+ *			default palladium data will be used to meter the battery
  */
 struct pm8921_bms_platform_data {
 	struct pm8xxx_bms_core_data	bms_cdata;
@@ -63,6 +65,10 @@ struct pm8921_bms_platform_data {
 	int				disable_flat_portion_ocv;
 	int				ocv_dis_high_soc;
 	int				ocv_dis_low_soc;
+#ifdef CONFIG_PM8921_EXTENDED_INFO
+	int64_t (*get_batt_info) (int64_t battery_id,
+				  struct bms_battery_data *data);
+#endif
 };
 
 #if defined(CONFIG_PM8921_BMS) || defined(CONFIG_PM8921_BMS_MODULE)
@@ -107,6 +113,28 @@ int pm8921_bms_get_percent_charge(void);
 int pm8921_bms_get_fcc(void);
 
 /**
+ * pm8921_bms_get_cc_uah - returns cc_uah in microampere_hour of
+			    the battery
+ *
+ * @result:	The pointer where the cc_uah will be updated.
+ *
+ * RETURNS:	Error code if there was a problem reading, Zero otherwise
+ *              The result won't be updated in case of an error.
+ */
+int pm8921_bms_get_cc_uah(int *result);
+
+/**
+ * pm8921_bms_get_aged_capacity - returns percentage of full battery capacity taking
+ *					  aging into acccount
+ *
+ * @result:	The pointer where the percentage will be updated.
+ *
+ * RETURNS:	Error code if there was a problem reading, Zero otherwise
+ *              The result won't be updated in case of an error.
+ */
+int pm8921_bms_get_aged_capacity(int *result);
+
+/**
  * pm8921_bms_charging_began - function to notify the bms driver that charging
  *				has started. Used by the bms driver to keep
  *				track of chargecycles
@@ -141,6 +169,45 @@ int pm8921_bms_get_current_max(void);
  *					soc stored in a coincell backed register
  */
 void pm8921_bms_invalidate_shutdown_soc(void);
+#ifdef CONFIG_PM8921_FLOAT_CHARGE
+/**
+ * pm8921_bms_charging_full - function to notify the bms driver that charging
+ *				is Full.
+ */
+void pm8921_bms_charging_full(void);
+/**
+ * pm8921_bms_no_external_accy - function to notify the bms driver that No Accy
+ *				is attached.
+ */
+void pm8921_bms_no_external_accy(void);
+#else
+static inline void pm8921_bms_charging_full(void)
+{
+}
+#endif
+#ifdef CONFIG_PM8921_EXTENDED_INFO
+/**
+ * pm8921_bms_voltage_based_capacity - function toadjust meter offset
+ */
+void pm8921_bms_voltage_based_capacity(int batt_mvolt,
+					int batt_mcurr,
+					int batt_temp);
+/**
+ * pm8921_bms_calculate_chrg_fcc - function to calculate charge fcc
+ */
+void pm8921_bms_calculate_chrg_fcc(int ocv_mv,
+				   int ocv_cc_uah,
+				   int full_cc_uah,
+				   int full_temp_c);
+/**
+ * pm8921_bms_get_chrg_ocv_time - function to get time of Charge OCV
+ */
+int pm8921_bms_get_chrg_ocv_time(void);
+
+#endif
+#ifdef CONFIG_PM8921_TEST_OVERRIDE
+int pm8921_override_get_charge_status(int *status);
+#endif
 
 /**
  * pm8921_bms_cc_uah -	function to get the coulomb counter based charge. Note
@@ -167,6 +234,18 @@ static inline int pm8921_bms_get_fcc(void)
 {
 	return -ENXIO;
 }
+static inline int pm8921_bms_get_cc_uah(int *result)
+{
+	return -ENXIO;
+}
+static inline int pm8921_bms_get_aged_capacity(int *result)
+{
+	return -ENXIO;
+}
+static inline int pm8921_bms_get_cc_mas(int64_t *result)
+{
+	return -ENXIO;
+}
 static inline void pm8921_bms_charging_began(void)
 {
 }
@@ -186,6 +265,9 @@ static inline int pm8921_bms_get_rbatt(void)
 	return -EINVAL;
 }
 static inline void pm8921_bms_invalidate_shutdown_soc(void)
+{
+}
+static inline void pm8921_bms_no_external_accy(void)
 {
 }
 static inline int pm8921_bms_cc_uah(int *cc_uah)

@@ -27,6 +27,7 @@
 #include <mach/peripheral-loader.h>
 #include <mach/msm_smd.h>
 #include <mach/msm_iomap.h>
+#include <asm/system_info.h>
 
 #define DEVICE "wcnss_wlan"
 #define VERSION "1.01"
@@ -830,6 +831,9 @@ wcnss_wlan_probe(struct platform_device *pdev)
 	if (ret)
 		return -ENOENT;
 
+
+	/* populate serial_number during init */
+	penv->serial_number = system_serial_low;
 
 #ifdef MODULE
 

@@ -487,7 +487,7 @@ struct ion_platform_heap msm8960_heaps[] = {
 		},
 		{
 			.id     = ION_ADSP_HEAP_ID,
-			.type   = ION_HEAP_TYPE_DMA,
+			.type   = ION_HEAP_TYPE_CARVEOUT,
 			.name   = ION_ADSP_HEAP_NAME,
 			.size   = MSM_ION_ADSP_SIZE,
 			.memory_type = ION_EBI_TYPE,
@@ -801,7 +801,7 @@ static struct reserve_info msm8960_reserve_info __initdata = {
 	.paddr_to_memtype = msm8960_paddr_to_memtype,
 };
 
-static void __init msm8960_early_memory(void)
+void __init msm8960_early_memory(void)
 {
 	reserve_info = &msm8960_reserve_info;
 }
@@ -824,13 +824,13 @@ static int __init ext_display_setup(char *param)
 }
 early_param("ext_display", ext_display_setup);
 
-static void __init msm8960_reserve(void)
+void __init msm8960_reserve(void)
 {
 	msm8960_set_display_params(prim_panel_name, ext_panel_name);
 	msm_reserve();
 }
 
-static void __init msm8960_allocate_memory_regions(void)
+void __init msm8960_allocate_memory_regions(void)
 {
 	msm8960_allocate_fb_region();
 }
@@ -848,6 +848,7 @@ static void __init msm8960_allocate_memory_regions(void)
  * does not need to be as high as 2.85V. It is choosen for
  * microphone sensitivity purpose.
  */
+#ifdef MSM8960_ES1_HW_SUPPORT
 static struct wcd9xxx_pdata tabla_platform_data = {
 	.slimbus_slave_device = {
 		.name = "tabla-slave",
@@ -914,7 +915,7 @@ static struct slim_device msm_slim_tabla = {
 		.platform_data = &tabla_platform_data,
 	},
 };
-
+#endif
 static struct wcd9xxx_pdata tabla20_platform_data = {
 	.slimbus_slave_device = {
 		.name = "tabla-slave",
@@ -985,10 +986,12 @@ static struct slim_device msm_slim_tabla20 = {
 
 static struct slim_boardinfo msm_slim_devices[] = {
 #ifdef CONFIG_WCD9310_CODEC
+#ifdef MSM8960_ES1_HW_SUPPORT
 	{
 		.bus_num = 1,
 		.slim_slave = &msm_slim_tabla,
 	},
+#endif
 	{
 		.bus_num = 1,
 		.slim_slave = &msm_slim_tabla20,
@@ -1439,7 +1442,7 @@ static struct platform_device msm_device_tspp = {
 
 #define MSM_SHARED_RAM_PHYS 0x80000000
 
-static void __init msm8960_map_io(void)
+void __init msm8960_map_io(void)
 {
 	msm_shared_ram_phys = MSM_SHARED_RAM_PHYS;
 	msm_map_msm8960_io();
@@ -1448,7 +1451,7 @@ static void __init msm8960_map_io(void)
 		pr_err("socinfo_init() failed!\n");
 }
 
-static void __init msm8960_init_irq(void)
+void __init msm8960_init_irq(void)
 {
 	struct msm_mpm_device_data *data = NULL;
 
@@ -2741,22 +2744,19 @@ static void __init bt_power_init(void)
 #define bt_power_init(x) do {} while (0)
 #endif
 
+struct msm8960_oem_init_ptrs msm8960_oem_funcs;
+
+static struct platform_device *regulator_devices[] __initdata = {
+	&msm8960_device_ext_5v_vreg,
+	&msm8960_device_ext_otg_sw_vreg,
+};
+
 static struct platform_device *common_devices[] __initdata = {
 	&msm8960_device_dmov,
 	&msm_device_smd,
-	&msm_device_uart_dm6,
 	&msm_device_saw_core0,
 	&msm_device_saw_core1,
-	&msm8960_device_ext_5v_vreg,
 	&msm8960_device_ssbi_pmic,
-	&msm8960_device_ext_otg_sw_vreg,
-	&msm8960_device_qup_spi_gsbi1,
-	&msm8960_device_qup_i2c_gsbi3,
-	&msm8960_device_qup_i2c_gsbi4,
-	&msm8960_device_qup_i2c_gsbi10,
-#ifndef CONFIG_MSM_DSPS
-	&msm8960_device_qup_i2c_gsbi12,
-#endif
 	&msm_slim_ctrl,
 	&msm_device_wcnss_wlan,
 #if defined(CONFIG_BT) && defined(CONFIG_BT_HCIUART_ATH3K)
@@ -3242,6 +3242,45 @@ static void __init register_i2c_devices(void)
 #endif
 }
 
+static void __init msm8960_gsbi_dev_init(void)
+{
+	msm8960_device_qup_spi_gsbi1.dev.platform_data =
+				&msm8960_qup_spi_gsbi1_pdata;
+	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
+	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE)
+		spi_register_board_info(spi_eth_info, ARRAY_SIZE(spi_eth_info));
+
+	msm8960_i2c_init();
+
+	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE)
+		platform_device_register(&msm8960_device_uart_gsbi8);
+	else
+		platform_device_register(&msm8960_device_uart_gsbi5);
+
+	/* For 8960 Fusion 2.2 Primary IPC */
+	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE) {
+		msm_uart_dm9_pdata.wakeup_irq = gpio_to_irq(94); /* GSBI9(2) */
+		msm_device_uart_dm9.dev.platform_data = &msm_uart_dm9_pdata;
+		platform_device_register(&msm_device_uart_dm9);
+	}
+
+	/* For 8960 Standalone External Bluetooth Interface */
+	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE) {
+		msm_device_uart_dm8.dev.platform_data = &msm_uart_dm8_pdata;
+		platform_device_register(&msm_device_uart_dm8);
+	}
+
+	/* Common Devices */
+	platform_device_register(&msm8960_device_qup_spi_gsbi1);
+	platform_device_register(&msm8960_device_qup_i2c_gsbi3);
+	platform_device_register(&msm8960_device_qup_i2c_gsbi4);
+	platform_device_register(&msm8960_device_qup_i2c_gsbi10);
+#ifndef CONFIG_MSM_DSPS
+	platform_device_register(&msm8960_device_qup_i2c_gsbi12);
+#endif
+	platform_device_register(&msm_device_uart_dm6);
+}
+
 static void __init msm8960_tsens_init(void)
 {
 	if (cpu_is_msm8960())
@@ -3249,6 +3288,15 @@ static void __init msm8960_tsens_init(void)
 			return;
 
 	msm_tsens_early_init(&msm_tsens_pdata);
+}
+
+static void __init msm8960_regulator_init(void)
+{
+	if (machine_is_msm8960_liquid())
+		platform_device_register(&msm8960_device_ext_3p3v_vreg);
+	if (machine_is_msm8960_cdp())
+		platform_device_register(&msm8960_device_ext_l2_vreg);
+	platform_add_devices(regulator_devices, ARRAY_SIZE(regulator_devices));
 }
 
 static void __init msm8960ab_update_krait_spm(void)
@@ -3273,7 +3321,7 @@ static void __init msm8960ab_update_krait_spm(void)
 	}
 }
 
-static void __init msm8960_cdp_init(void)
+void __init msm8960_cdp_init(void)
 {
 	if (meminfo_init(SYS_MEMORY, SZ_256M) < 0)
 		pr_err("meminfo_init() failed!\n");
@@ -3289,7 +3337,12 @@ static void __init msm8960_cdp_init(void)
 		pr_err("Failed to initialize XO votes\n");
 	configure_msm8960_power_grid();
 	platform_device_register(&msm8960_device_rpm_regulator);
+
+	if (msm8960_oem_funcs.msm_clock_init)
+		msm8960_oem_funcs.msm_clock_init(&msm8960_oem_funcs,
+						 &msm8960_clock_init_data);
 	msm_clock_init(&msm8960_clock_init_data);
+
 	if (machine_is_msm8960_liquid())
 		msm_otg_pdata.mhl_enable = true;
 	msm8960_device_otg.dev.platform_data = &msm_otg_pdata;
@@ -3314,18 +3367,14 @@ static void __init msm8960_cdp_init(void)
 					machine_is_msm8960_liquid())
 		msm_device_hsic_host.dev.parent = &smsc_hub_device.dev;
 	msm8960_init_gpiomux();
-	msm8960_device_qup_spi_gsbi1.dev.platform_data =
-				&msm8960_qup_spi_gsbi1_pdata;
-	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
-	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE)
-		spi_register_board_info(spi_eth_info, ARRAY_SIZE(spi_eth_info));
+	if (msm8960_oem_funcs.msm_gpio_init)
+		msm8960_oem_funcs.msm_gpio_init(&msm8960_oem_funcs);
 
 	msm8960_init_pmic();
 	if (machine_is_msm8960_liquid() || (machine_is_msm8960_mtp() &&
 		(socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE ||
 			cpu_is_msm8960ab())))
 		msm_isa1200_board_info[0].platform_data = &isa1200_1_pdata;
-	msm8960_i2c_init();
 	msm8960_gfx_init();
  	if (cpu_is_msm8960ab())
 		msm8960ab_update_krait_spm();
@@ -3339,28 +3388,21 @@ static void __init msm8960_cdp_init(void)
 		platform_add_devices(msm8960_footswitch,
 				     msm8960_num_footswitch);
 	}
-	if (machine_is_msm8960_liquid())
-		platform_device_register(&msm8960_device_ext_3p3v_vreg);
-	if (machine_is_msm8960_cdp())
-		platform_device_register(&msm8960_device_ext_l2_vreg);
 
-	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE)
-		platform_device_register(&msm8960_device_uart_gsbi8);
+	/*
+	 * Only register gpio regulator here for upstream boards.
+	 * OEM gpio regulators will have already registered in the
+	 * call to configure_msm8960_power_grid(), if needed.
+	 */
+	if (!msm8960_oem_funcs.msm_regulator_init)
+		msm8960_regulator_init();
+
+	/* Centralized init function for all GSBI devices */
+	if (msm8960_oem_funcs.msm_gsbi_init)
+		msm8960_oem_funcs.msm_gsbi_init(&msm8960_oem_funcs);
 	else
-		platform_device_register(&msm8960_device_uart_gsbi5);
+		msm8960_gsbi_dev_init();
 
-	/* For 8960 Fusion 2.2 Primary IPC */
-	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE) {
-		msm_uart_dm9_pdata.wakeup_irq = gpio_to_irq(94); /* GSBI9(2) */
-		msm_device_uart_dm9.dev.platform_data = &msm_uart_dm9_pdata;
-		platform_device_register(&msm_device_uart_dm9);
-	}
-
-	/* For 8960 Standalone External Bluetooth Interface */
-	if (socinfo_get_platform_subtype() != PLATFORM_SUBTYPE_SGLTE) {
-		msm_device_uart_dm8.dev.platform_data = &msm_uart_dm8_pdata;
-		platform_device_register(&msm_device_uart_dm8);
-	}
 	if (cpu_is_msm8960ab())
 		platform_device_register(&msm8960ab_device_acpuclk);
 	else
@@ -3368,12 +3410,22 @@ static void __init msm8960_cdp_init(void)
 	platform_add_devices(common_devices, ARRAY_SIZE(common_devices));
 	msm8960_add_vidc_device();
 
-	msm8960_pm8921_gpio_mpp_init();
+	/* PM8921 GPIO and MPP MUX Configurations */
+	if (msm8960_oem_funcs.msm_gpio_mpp_init)
+		msm8960_oem_funcs.msm_gpio_mpp_init(&msm8960_oem_funcs);
+	else
+		msm8960_pm8921_gpio_mpp_init();
+
+	if (msm8960_oem_funcs.msm_otg_init)
+		msm8960_oem_funcs.msm_otg_init(&msm8960_oem_funcs,
+						&msm_otg_pdata);
+
 	/* Don't add modem devices on APQ targets */
 	if (socinfo_get_id() != 124) {
 		platform_device_register(&msm_8960_q6_mss_fw);
 		platform_device_register(&msm_8960_q6_mss_sw);
 	}
+
 	platform_add_devices(cdp_devices, ARRAY_SIZE(cdp_devices));
 	msm8960_init_smsc_hub();
 	msm8960_init_hsic();
@@ -3383,7 +3435,12 @@ static void __init msm8960_cdp_init(void)
 	msm8960_init_mmc();
 	if (machine_is_msm8960_liquid())
 		mxt_init_hw_liquid();
-	register_i2c_devices();
+
+	/* I2C Device Registration */
+	if (msm8960_oem_funcs.msm_i2c_init)
+		msm8960_oem_funcs.msm_i2c_init(&msm8960_oem_funcs);
+	else
+		register_i2c_devices();
 	msm8960_init_fb();
 	slim_register_board_info(msm_slim_devices,
 		ARRAY_SIZE(msm_slim_devices));
@@ -3395,6 +3452,9 @@ static void __init msm8960_cdp_init(void)
 		platform_device_register(&mdm_sglte_device);
 	}
 	msm_pm_set_tz_retention_flag(1);
+
+	if (msm8960_oem_funcs.msm_device_init)
+		msm8960_oem_funcs.msm_device_init(&msm8960_oem_funcs);
 }
 
 MACHINE_START(MSM8960_CDP, "QCT MSM8960 CDP")

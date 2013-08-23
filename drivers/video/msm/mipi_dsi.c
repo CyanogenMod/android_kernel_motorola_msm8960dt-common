@@ -47,6 +47,7 @@ static int mipi_dsi_off(struct platform_device *pdev);
 static int mipi_dsi_on(struct platform_device *pdev);
 static int mipi_dsi_fps_level_change(struct platform_device *pdev,
 					u32 fps_level);
+static int mipi_dsi_panel_on(struct platform_device *pdev);
 
 static struct platform_device *pdev_list[MSM_FB_MAX_DEV_LIST];
 static int pdev_list_cnt;
@@ -73,6 +74,29 @@ static int mipi_dsi_fps_level_change(struct platform_device *pdev,
 	return 0;
 }
 
+static int mipi_dsi_panel_power_en(int on)
+{
+	int ret = 0;
+
+	if (mipi_dsi_pdata && mipi_dsi_pdata->panel_power_en)
+		ret = mipi_dsi_pdata->panel_power_en(on);
+
+	return ret;
+}
+
+int mipi_dsi_panel_power_enable(int on)
+{
+	if (mipi_dsi_pdata && mipi_dsi_pdata->panel_power_save)
+		return mipi_dsi_pdata->panel_power_save(on);
+	else
+		return 0;
+}
+
+static int mipi_dsi_panel_on(struct platform_device *pdev)
+{
+	return panel_next_panel_on(pdev);
+}
+
 static int mipi_dsi_off(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -90,9 +114,7 @@ static int mipi_dsi_off(struct platform_device *pdev)
 		down(&mfd->dma->mutex);
 
 	if (mfd->panel_info.type == MIPI_CMD_PANEL) {
-		mipi_dsi_prepare_clocks();
-		mipi_dsi_ahb_ctrl(1);
-		mipi_dsi_clk_enable();
+		mipi_dsi_clk_cfg(1);
 
 		/* make sure dsi_cmd_mdp is idle */
 		mipi_dsi_cmd_mdp_busy();
@@ -117,19 +139,32 @@ static int mipi_dsi_off(struct platform_device *pdev)
 	ret = panel_next_off(pdev);
 
 	spin_lock_bh(&dsi_clk_lock);
+	/* decrease clk cnt for clk disable operations */
+	mipi_dsi_clk_cnt(-1);
 
 	mipi_dsi_clk_disable();
 
 	/* disbale dsi engine */
 	MIPI_OUTP(MIPI_DSI_BASE + 0x0000, 0);
 
-	mipi_dsi_phy_ctrl(0);
+	if (!(mfd->panel_info.mipi.keep_mipi_lanes_lp11))
+		mipi_dsi_phy_ctrl(0);
 
 	mipi_dsi_ahb_ctrl(0);
 	spin_unlock_bh(&dsi_clk_lock);
 
 	mipi_dsi_unprepare_clocks();
-	if (mipi_dsi_pdata && mipi_dsi_pdata->dsi_power_save)
+
+	if (mipi_dsi_pdata && mipi_dsi_pdata->panel_power_save) {
+		if (mfd->suspend_cfg.partial)
+			mipi_dsi_pdata->panel_power_save(
+				MSM_DISP_POWER_OFF_PARTIAL);
+		else
+			mipi_dsi_pdata->panel_power_save(MSM_DISP_POWER_OFF);
+	}
+
+	if (!(mfd->panel_info.mipi.keep_mipi_lanes_lp11) &&
+			mipi_dsi_pdata && mipi_dsi_pdata->dsi_power_save)
 		mipi_dsi_pdata->dsi_power_save(0);
 
 	if (mdp_rev >= MDP_REV_41)
@@ -155,6 +190,7 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	u32 ystride, bpp, data;
 	u32 dummy_xres, dummy_yres;
 	int target_type = 0;
+	int old_nice;
 
 	pr_debug("%s+:\n", __func__);
 
@@ -163,16 +199,30 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	var = &fbi->var;
 	pinfo = &mfd->panel_info;
 
+	/*
+	 * Now first priority is to turn on LCD quickly for better
+	 * user experience. We set current task to higher priority
+	 * and restore it after panel is on.
+	 */
+	old_nice = task_nice(current);
+	if (old_nice > -20)
+		set_user_nice(current, -20);
+
 	if (mipi_dsi_pdata && mipi_dsi_pdata->dsi_power_save)
 		mipi_dsi_pdata->dsi_power_save(1);
 
-	cont_splash_clk_ctrl(0);
 	mipi_dsi_prepare_clocks();
 
 	mipi_dsi_ahb_ctrl(1);
 
 	clk_rate = mfd->fbi->var.pixclock;
 	clk_rate = min(clk_rate, mfd->panel_info.clk_max);
+
+	mipi  = &mfd->panel_info.mipi;
+	/* Clean up the force clk lane to enter HS from previous boot */
+	if ((mfd->panel_info.type == MIPI_VIDEO_PANEL) &&
+							mipi->force_clk_lane_hs)
+		MIPI_OUTP(MIPI_DSI_BASE + 0x00a8, 0);
 
 	mipi_dsi_phy_ctrl(1);
 
@@ -182,6 +232,9 @@ static int mipi_dsi_on(struct platform_device *pdev)
 	mipi_dsi_phy_init(0, &(mfd->panel_info), target_type);
 
 	mipi_dsi_clk_enable();
+
+	/* increase clk cnt for clk enable operations */
+	mipi_dsi_clk_cnt(1);
 
 	MIPI_OUTP(MIPI_DSI_BASE + 0x114, 1);
 	MIPI_OUTP(MIPI_DSI_BASE + 0x114, 0);
@@ -253,7 +306,22 @@ static int mipi_dsi_on(struct platform_device *pdev)
 
 	mipi_dsi_host_init(mipi);
 
-	if (mipi->force_clk_lane_hs) {
+	/*
+	 * The MIPI host is done with INIT now, the lines are at LP-11,
+	 * and it is safe to turn on the power to the panel and get it out
+	 * of reset
+	 */
+
+	if (mipi_dsi_pdata && mipi_dsi_pdata->panel_power_save)
+		mipi_dsi_pdata->panel_power_save(MSM_DISP_POWER_ON);
+
+	if (mdp_rev >= MDP_REV_41)
+		mutex_lock(&mfd->dma->ov_mutex);
+	else
+		down(&mfd->dma->mutex);
+
+	if ((mfd->panel_info.type == MIPI_VIDEO_PANEL) &&
+						mipi->force_clk_lane_hs) {
 		u32 tmp;
 
 		tmp = MIPI_INP(MIPI_DSI_BASE + 0xA8);
@@ -261,11 +329,6 @@ static int mipi_dsi_on(struct platform_device *pdev)
 		MIPI_OUTP(MIPI_DSI_BASE + 0xA8, tmp);
 		wmb();
 	}
-
-	if (mdp_rev >= MDP_REV_41)
-		mutex_lock(&mfd->dma->ov_mutex);
-	else
-		down(&mfd->dma->mutex);
 
 	ret = panel_next_on(pdev);
 
@@ -316,15 +379,18 @@ static int mipi_dsi_on(struct platform_device *pdev)
 			}
 			mipi_dsi_set_tear_on(mfd);
 		}
-		mipi_dsi_clk_disable();
-		mipi_dsi_ahb_ctrl(0);
-		mipi_dsi_unprepare_clocks();
+
+		mipi_dsi_clk_cfg(0);
 	}
 
 	if (mdp_rev >= MDP_REV_41)
 		mutex_unlock(&mfd->dma->ov_mutex);
 	else
 		up(&mfd->dma->mutex);
+
+	/* Restore current priority */
+	if (old_nice > -20)
+		set_user_nice(current, old_nice);
 
 	pr_debug("%s-:\n", __func__);
 
@@ -491,6 +557,9 @@ static int mipi_dsi_probe(struct platform_device *pdev)
 	pdata->fps_level_change = mipi_dsi_fps_level_change;
 	pdata->late_init = mipi_dsi_late_init;
 	pdata->early_off = mipi_dsi_early_off;
+	pdata->panel_on = mipi_dsi_panel_on;
+	pdata->panel_power_en = mipi_dsi_panel_power_en;
+
 	pdata->next = pdev;
 
 	/*
@@ -503,6 +572,8 @@ static int mipi_dsi_probe(struct platform_device *pdev)
 		mfd->dest = DISPLAY_LCDC;
 	else
 		mfd->dest = DISPLAY_LCD;
+
+	mutex_init(&mfd->panel_info.mipi.panel_mutex);
 
 	if (mdp_rev == MDP_REV_303 &&
 		mipi_dsi_pdata->get_lane_config) {
@@ -643,6 +714,12 @@ static int __init mipi_dsi_driver_init(void)
 	}
 
 	return ret;
+}
+
+int mipi_dsi_cont_splash_enabled(void)
+{
+	return mipi_dsi_pdata && mipi_dsi_pdata->splash_is_enabled &&
+		mipi_dsi_pdata->splash_is_enabled();
 }
 
 module_init(mipi_dsi_driver_init);

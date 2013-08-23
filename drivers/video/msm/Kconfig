@@ -1,6 +1,12 @@
 
 source "drivers/video/msm/vidc/Kconfig"
 
+config MIPI_MOT_NOTIFICATIONS
+	bool "Enable display suspend/resume notifier"
+	default n
+	---help---
+	  Support for synchronized display and touch option.
+
 config FB_MSM
 	tristate "MSM Framebuffer support"
 	depends on FB && ARCH_MSM
@@ -230,6 +236,11 @@ config FB_MSM_MIPI_DSI_TC358764_DSI2LVDS
 	  and up to WUXGA 1920x1200 18-bit
 	  using a dual LVDS link.
 
+config FB_MSM_MIPI_DSI_MOT
+	bool
+	select FB_MSM_MIPI_DSI
+	default n
+
 config FB_MSM_LCDC_ST15_WXGA
     bool
     select FB_MSM_LCDC_PANEL
@@ -354,6 +365,11 @@ config FB_MSM_MIPI_ORISE_VIDEO_720P_PT
 config FB_MSM_MIPI_ORISE_CMD_720P_PT
 	bool
 	select FB_MSM_MIPI_DSI_ORISE
+	default n
+
+config FB_MSM_MIPI_DSI_MOT_PT
+	bool
+	select FB_MSM_MIPI_DSI_MOT
 	default n
 
 config FB_MSM_MIPI_RENESAS_VIDEO_FWVGA_PT
@@ -705,6 +721,13 @@ config FB_MSM_MIPI_ORISE_VIDEO_720P_PT_PANEL
 config FB_MSM_MIPI_ORISE_CMD_720P_PT_PANEL
 	bool "MIPI ORISE CMD 720P PT Panel"
 	select FB_MSM_MIPI_ORISE_CMD_720P_PT
+
+config FB_MSM_MIPI_MOT_PT_PANEL
+	bool "MIPI MOT Panel"
+	select FB_MSM_MIPI_DSI_MOT_PT
+	select MIPI_MOT_NOTIFICATIONS
+	---help---
+	  Support for MOT generic panel
 
 config FB_MSM_MIPI_RENESAS_VIDEO_FWVGA_PT_PANEL
 	bool "MIPI Renesas Video FWVGA PT Panel"

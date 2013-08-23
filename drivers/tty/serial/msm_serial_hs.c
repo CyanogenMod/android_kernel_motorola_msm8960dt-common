@@ -4,6 +4,7 @@
  *
  * Copyright (c) 2008 Google Inc.
  * Copyright (c) 2007-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012, Motorola Mobility LLC
  * Modified: Nick Pelly <npelly@google.com>
  *
  * All source code in this file is licensed under the following license
@@ -35,6 +36,7 @@
 #include <linux/serial.h>
 #include <linux/serial_core.h>
 #include <linux/slab.h>
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -45,6 +47,7 @@
 #include <linux/clk.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/of.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
 #include <linux/tty_flip.h>
@@ -694,6 +697,7 @@ static unsigned long msm_hs_set_bps_locked(struct uart_port *uport,
 	case 3500000:
 	case 3000000:
 	case 2500000:
+	case 2000000:
 	case 1500000:
 	case 1152000:
 	case 1000000:
@@ -878,6 +882,8 @@ static void msm_hs_set_termios(struct uart_port *uport,
 		data |= STOP_BIT_ONE;
 	}
 	data |= UARTDM_MR2_ERROR_MODE_BMSK;
+	data |= UARTDM_MR2_RX_ERROR_CHAR_OFF;
+	data |= UARTDM_MR2_RX_BREAK_ZERO_CHAR_OFF;
 	/* write parity/bits per char/stop bit configuration */
 	msm_hs_write(uport, UARTDM_MR2_ADDR, data);
 
@@ -1173,6 +1179,8 @@ static void msm_serial_hs_rx_tlet(unsigned long tlet_ptr)
 	/* overflow is not connect to data in a FIFO */
 	if (unlikely((status & UARTDM_SR_OVERRUN_BMSK) &&
 		     (uport->read_status_mask & CREAD))) {
+		if (hs_serial_debug_mask)
+			printk(KERN_WARNING "msm_serial_hs: overrun");
 		retval = tty_insert_flip_char(tty, 0, TTY_OVERRUN);
 		if (!retval)
 			msm_uport->rx.buffer_pending |= TTY_OVERRUN;
@@ -1428,14 +1436,6 @@ static void msm_hs_enable_ms_locked(struct uart_port *uport)
 
 }
 
-static void msm_hs_flush_buffer_locked(struct uart_port *uport)
-{
-	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
-
-	if (msm_uport->tx.dma_in_flight)
-		msm_uport->tty_flush_receive = true;
-}
-
 /*
  *  Standard API, Break Signal
  *
@@ -1665,14 +1665,7 @@ static irqreturn_t msm_hs_isr(int irq, void *dev)
 		 */
 		mb();
 		/* Complete DMA TX transactions and submit new transactions */
-
-		/* Do not update tx_buf.tail if uart_flush_buffer already
-						called in serial core */
-		if (!msm_uport->tty_flush_receive)
-			tx_buf->tail = (tx_buf->tail +
-					tx->tx_count) & ~UART_XMIT_SIZE;
-		else
-			msm_uport->tty_flush_receive = false;
+		tx_buf->tail = (tx_buf->tail + tx->tx_count) & ~UART_XMIT_SIZE;
 
 		tx->dma_in_flight = 0;
 
@@ -2109,6 +2102,66 @@ free_tx_command_ptr:
 	return ret;
 }
 
+#ifdef CONFIG_OF
+static u64 msm_serial_hs_dma_mask = DMA_BIT_MASK(32);
+
+static struct msm_serial_hs_platform_data __devinit *
+msm_hs_of_init(struct platform_device *pdev)
+{
+	struct msm_serial_hs_platform_data *pdata;
+	struct device_node *np = pdev->dev.of_node;
+	int size, i;
+	struct resource *r;
+
+	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return NULL;
+
+	/* Default to an invalid GPIO so its not configured */
+	/* TODO: expand support for wakeup IRQ capable devices */
+	pdata->wakeup_irq = -1;
+
+	/* OF driver does not populate/parse built-in IORESOURCE_DMA
+	 * resource types. To minimize impact on the original probe, we'll
+	 * stuff them from the DT properties.....
+	 */
+	size = pdev->num_resources + 2; /* uartdm channels & crci */
+	r = devm_kzalloc(&pdev->dev, size*sizeof(*r), GFP_KERNEL);
+	if (!r)
+		return NULL;
+	memcpy(r, pdev->resource, pdev->num_resources*sizeof(*r));
+	i = pdev->num_resources;
+
+	of_property_read_u32(np, "qcom,msm-hs-dm-tx-chan", &r[i].start);
+	of_property_read_u32(np, "qcom,msm-hs-dm-rx-chan", &r[i].end);
+	r[i].name = "uartdm_channels";
+	r[i].flags = IORESOURCE_DMA;
+	i++;
+
+	of_property_read_u32(np, "qcom,msm-hs-dm-tx-crci", &r[i].start);
+	of_property_read_u32(np, "qcom,msm-hs-dm-rx-crci", &r[i].end);
+	r[i].name = "uartdm_crci";
+	r[i].flags = IORESOURCE_DMA;
+	i++;
+
+	of_property_read_u32(np, "cell-index", &pdev->id);
+
+	/* Right now, device-tree probed devices don't get dma_mask set. */
+	pdev->dev.dma_mask = &msm_serial_hs_dma_mask;
+
+	pdev->num_resources = size;
+	pdev->resource = r;
+
+	return pdata;
+}
+#else
+static inline struct msm_serial_hs_platform_data *
+msm_hs_of_init(struct platform_device *pdev)
+{
+	return NULL;
+}
+#endif
+
 static int __devinit msm_hs_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -2117,6 +2170,8 @@ static int __devinit msm_hs_probe(struct platform_device *pdev)
 	struct resource *resource;
 	struct msm_serial_hs_platform_data *pdata = pdev->dev.platform_data;
 
+	if (pdev->dev.of_node)
+		pdata = msm_hs_of_init(pdev);
 	if (pdev->id < 0 || pdev->id >= UARTDM_NR) {
 		printk(KERN_ERR "Invalid plaform device ID = %d\n", pdev->id);
 		return -EINVAL;
@@ -2140,7 +2195,7 @@ static int __devinit msm_hs_probe(struct platform_device *pdev)
 	if (unlikely((int)uport->irq < 0))
 		return -ENXIO;
 
-	if (pdata == NULL)
+	if (pdata == NULL || !gpio_is_valid(pdata->wakeup_irq))
 		msm_uport->wakeup.irq = -1;
 	else {
 		msm_uport->wakeup.irq = pdata->wakeup_irq;
@@ -2347,7 +2402,11 @@ static void msm_hs_shutdown(struct uart_port *uport)
 	}
 	tasklet_kill(&msm_uport->tx.tlet);
 	BUG_ON(msm_uport->rx.flush < FLUSH_STOP);
-	wait_event(msm_uport->rx.wait, msm_uport->rx.flush == FLUSH_SHUTDOWN);
+	ret = wait_event_timeout(msm_uport->rx.wait,
+			msm_uport->rx.flush == FLUSH_SHUTDOWN, HZ);
+	if (!ret)
+		pr_err("%s(): HSUART RX Stall.\n", __func__);
+
 	tasklet_kill(&msm_uport->rx.tlet);
 	cancel_delayed_work_sync(&msm_uport->rx.flip_insert_work);
 	flush_workqueue(msm_uport->hsuart_wq);
@@ -2431,12 +2490,21 @@ static const struct dev_pm_ops msm_hs_dev_pm_ops = {
 	.runtime_idle    = msm_hs_runtime_idle,
 };
 
+#ifdef CONFIG_OF
+static struct of_device_id msm_hs_match_table[] = {
+	{ .compatible = "qcom,msm-hsuart", },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, msm_hs_match_table);
+#endif
+
 static struct platform_driver msm_serial_hs_platform_driver = {
 	.probe	= msm_hs_probe,
 	.remove = __devexit_p(msm_hs_remove),
 	.driver = {
 		.name = "msm_serial_hs",
 		.pm   = &msm_hs_dev_pm_ops,
+		.of_match_table = of_match_ptr(msm_hs_match_table),
 	},
 };
 
@@ -2464,7 +2532,6 @@ static struct uart_ops msm_hs_ops = {
 	.config_port = msm_hs_config_port,
 	.release_port = msm_hs_release_port,
 	.request_port = msm_hs_request_port,
-	.flush_buffer = msm_hs_flush_buffer_locked,
 };
 
 module_init(msm_serial_hs_init);

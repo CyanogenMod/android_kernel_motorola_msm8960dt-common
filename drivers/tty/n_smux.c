@@ -1311,7 +1311,7 @@ static int smux_handle_rx_open_cmd(struct smux_pkt_t *pkt)
 				ack_pkt->hdr.cmd = SMUX_CMD_OPEN_LCH;
 				if (enable_powerdown)
 					ack_pkt->hdr.flags |=
-						SMUX_CMD_OPEN_POWER_COLLAPSE;
+					SMUX_CMD_OPEN_POWER_COLLAPSE;
 				ack_pkt->hdr.payload_len = 0;
 				ack_pkt->hdr.pad_len = 0;
 				smux_tx_queue(ack_pkt, ch, 0);
@@ -3187,7 +3187,7 @@ int msm_smux_close(uint8_t lcid)
 int msm_smux_write(uint8_t lcid, void *pkt_priv, const void *data, int len)
 {
 	struct smux_lch_t *ch;
-	struct smux_pkt_t *pkt;
+	struct smux_pkt_t *pkt = NULL;
 	int tx_ready = 0;
 	unsigned long flags;
 	int ret;

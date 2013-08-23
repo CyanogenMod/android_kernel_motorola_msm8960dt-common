@@ -50,9 +50,10 @@
 #define MIPI_DSI_PANEL_WSVGA_PT	4
 #define MIPI_DSI_PANEL_QHD_PT 5
 #define MIPI_DSI_PANEL_WXGA	6
-#define MIPI_DSI_PANEL_WUXGA	7
-#define MIPI_DSI_PANEL_720P_PT	8
-#define DSI_PANEL_MAX	8
+#define MIPI_DSI_PANEL_HD	7
+#define MIPI_DSI_PANEL_WUXGA	8
+#define MIPI_DSI_PANEL_720P_PT	9
+#define DSI_PANEL_MAX	9
 
 enum {		/* mipi dsi panel */
 	DSI_VIDEO_MODE,
@@ -189,7 +190,7 @@ struct dsi_clk_desc {
 #define DSI_HDR_DATA1(data)	((data) & 0x0ff)
 #define DSI_HDR_WC(wc)		((wc) & 0x0ffff)
 
-#define DSI_BUF_SIZE	64
+#define DSI_BUF_SIZE	1024	/* Bytes */
 #define MIPI_DSI_MRPS	0x04	/* Maximum Return Packet Size */
 
 #define MIPI_DSI_LEN 8 /* 4 x 4 - 6 - 2, bytes dcs header+crc-align  */
@@ -264,8 +265,9 @@ struct dsi_kickoff_action {
 
 typedef void (*fxn)(u32 data);
 
-#define CMD_REQ_RX	0x0001
-#define CMD_REQ_COMMIT	0x0002
+#define CMD_REQ_TX              0x0000
+#define CMD_REQ_RX              0x0001
+#define CMD_REQ_COMMIT          0x0002
 #define CMD_CLK_CTRL	0x0004
 #define CMD_REQ_NO_MAX_PKT_SIZE 0x0008
 #define CMD_REQ_SINGLE_TX 0x0010
@@ -276,6 +278,7 @@ struct dcs_cmd_req {
 	u32 flags;
 	int rlen;	/* rx length */
 	fxn cb;
+	char *rdata;	/* buffer */
 };
 
 struct dcs_cmd_list {
@@ -325,6 +328,11 @@ void mipi_dsi_post_kickoff_del(struct dsi_kickoff_action *act);
 void mipi_dsi_controller_cfg(int enable);
 void mipi_dsi_sw_reset(void);
 void mipi_dsi_mdp_busy_wait(void);
+int mipi_reg_write(struct msm_fb_data_type *mfd, __u16 size,
+				__u8 *buf, __u8 use_hs_mode);
+
+int mipi_reg_read(struct msm_fb_data_type *mfd, __u16 address,
+				__u16 size, __u8 *buf, __u8 use_hs_mode);
 
 irqreturn_t mipi_dsi_isr(int irq, void *ptr);
 
@@ -374,13 +382,18 @@ void cont_splash_clk_ctrl(int enable);
 void mipi_dsi_turn_on_clks(void);
 void mipi_dsi_turn_off_clks(void);
 void mipi_dsi_clk_cfg(int on);
+void mipi_dsi_clk_cnt(int count);
 
 int mipi_dsi_cmdlist_put(struct dcs_cmd_req *cmdreq);
 struct dcs_cmd_req *mipi_dsi_cmdlist_get(void);
-void mipi_dsi_cmdlist_commit(int from_mdp);
+int mipi_dsi_cmdlist_commit(int from_mdp);
 void mipi_dsi_cmd_mdp_busy(void);
 void mipi_dsi_configure_fb_divider(u32 fps_level);
 void mipi_dsi_wait4video_done(void);
+int mipi_dsi_panel_power_enable(int on);
+void mipi_dsi_regs_dump(void);
+void mipi_set_mem_start_mem_cont(int mem_start, int mem_cont);
+int mipi_dsi_cont_splash_enabled(void);
 
 #ifdef CONFIG_FB_MSM_MDP303
 void update_lane_config(struct msm_panel_info *pinfo);

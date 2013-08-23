@@ -1,3 +1,10 @@
+ifdef CONFIG_FUNCTION_TRACER
+CFLAGS_REMOVE_timer.o = -pg
+CFLAGS_REMOVE_clock.o = -pg
+CFLAGS_REMOVE_acpuclock.o = -pg
+CFLAGS_REMOVE_scm.o = -pg
+endif
+
 CFLAGS_scm.o :=$(call as-instr,.arch_extension sec,-DREQUIRES_SEC=1)
 
 obj-y += io.o dma.o memory.o
@@ -206,6 +213,7 @@ ifdef CONFIG_MSM_SUBSYSTEM_RESTART
 	obj-y += subsystem_notif.o
 	obj-y += subsystem_restart.o
 	obj-y += ramdump.o
+	obj-y += modem_coredump.o
 	obj-$(CONFIG_ARCH_MSM8X60) += modem-8660.o lpass-8660.o
 endif
 obj-$(CONFIG_MSM_SYSMON_COMM) += sysmon.o
@@ -278,6 +286,7 @@ board-8960-all-objs += board-8960.o board-8960-camera.o board-8960-display.o boa
 board-8930-all-objs += board-8930.o board-8930-camera.o board-8930-display.o board-8930-pmic.o board-8930-storage.o board-8930-gpiomux.o devices-8930.o board-8930-gpu.o
 board-8064-all-objs += board-8064.o board-8064-pmic.o board-8064-storage.o board-8064-gpiomux.o board-8064-camera.o board-8064-display.o board-8064-gpu.o
 obj-$(CONFIG_MACH_MSM8960_CDP) += board-8960-all.o board-8960-regulator.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-8960-all.o board-8960-regulator.o
 obj-$(CONFIG_MACH_MSM8960_MTP) += board-8960-all.o board-8960-regulator.o
 obj-$(CONFIG_MACH_MSM8960_FLUID) += board-8960-all.o board-8960-regulator.o
 obj-$(CONFIG_MACH_MSM8930_CDP) += board-8930-all.o board-8930-regulator-pm8038.o board-8930-regulator-pm8917.o
@@ -306,6 +315,23 @@ obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-mmc.o board-sapphire-wifi.o
 obj-$(CONFIG_MACH_SAPPHIRE) += board-sapphire-rfkill.o msm_vibrator.o
 
 obj-$(CONFIG_MACH_LGE) += lge/
+
+obj-$(CONFIG_MACH_MSM8960_MMI) += devices-mmi.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += devtree_util.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-camera.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-clocks.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-display.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-gsbi.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-i2c.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-keypad.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-pmic.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-regulator.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += board-mmi-dsp.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += mmi-bms-batterydata.o
+obj-$(CONFIG_MACH_MSM8960_MMI) += mmi-pinmux.o
+
+obj-$(CONFIG_VIB_TIMED) += board-mmi-vibrator.o
 
 CFLAGS_msm_vibrator.o += -Idrivers/staging/android
 CFLAGS_board-9615.o += -Idrivers/usb/gadget
@@ -381,6 +407,7 @@ obj-$(CONFIG_MSM_RTB) += msm_rtb.o
 obj-$(CONFIG_MSM_CACHE_ERP) += cache_erp.o
 obj-$(CONFIG_MSM_EBI_ERP) += ebi_erp.o
 obj-$(CONFIG_MSM_CACHE_DUMP) += msm_cache_dump.o
+obj-$(CONFIG_PM_DEBUG) += pm_debug.o
 
 obj-$(CONFIG_MSM_HSIC_SYSMON) += hsic_sysmon.o
 obj-$(CONFIG_MSM_HSIC_SYSMON_TEST) += hsic_sysmon_test.o
@@ -393,3 +420,8 @@ ifdef CONFIG_MSM_CPR
 obj-$(CONFIG_DEBUG_FS) += msm_cpr-debug.o
 endif
 obj-$(CONFIG_MSM_CPU_PWRCTL) +=  msm_cpu_pwrctl.o
+
+obj-$(CONFIG_HOB_SHARED_RAM_MMI) += mmi_hob_ram_mmap.o
+obj-$(CONFIG_MMI_RAM_INFO) += mmi-ram-info.o
+obj-$(CONFIG_MMI_ACPU_INFO) += mmi_acpu_info.o
+obj-$(CONFIG_HAS_MACH_MEMUTILS) += memutils/

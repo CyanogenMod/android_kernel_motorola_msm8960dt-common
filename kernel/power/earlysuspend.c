@@ -43,6 +43,19 @@ enum {
 	SUSPEND_REQUESTED_AND_SUSPENDED = SUSPEND_REQUESTED | SUSPENDED,
 };
 static int state;
+#ifdef CONFIG_PM_DEBUG
+static void stuck_wakelock_timeout(unsigned long data);
+static void stuck_wakelock_wdset(void);
+static void stuck_wakelock_wdclr(void);
+static DEFINE_TIMER(stuck_wakelock_wd, stuck_wakelock_timeout, 0, 0);
+#else
+static inline void stuck_wakelock_wdset(void) {}
+static inline void stuck_wakelock_wdclr(void) {}
+#endif
+
+static struct task_struct *current_handler;
+static void handler_timeout(unsigned long data);
+static DEFINE_TIMER(handler_wd, handler_timeout, 0, 0);
 
 void register_early_suspend(struct early_suspend *handler)
 {
@@ -69,6 +82,27 @@ void unregister_early_suspend(struct early_suspend *handler)
 	mutex_unlock(&early_suspend_lock);
 }
 EXPORT_SYMBOL(unregister_early_suspend);
+
+static void handler_timeout(unsigned long data)
+{
+	pr_emerg("**** early suspend / late resume timeout at %pf\n",
+			(void *)data);
+	sched_show_task(current_handler);
+	BUG();
+}
+
+static void handler_wdset(void *function)
+{
+	current_handler = current;
+	handler_wd.data = (unsigned long)function;
+	mod_timer(&handler_wd, jiffies + (HZ * 12));
+}
+
+static void handler_wdclr(void)
+{
+	del_timer_sync(&handler_wd);
+	current_handler = NULL;
+}
 
 static void early_suspend(struct work_struct *work)
 {
@@ -97,12 +131,15 @@ static void early_suspend(struct work_struct *work)
 		if (pos->suspend != NULL) {
 			if (debug_mask & DEBUG_VERBOSE)
 				pr_info("early_suspend: calling %pf\n", pos->suspend);
+			handler_wdset(pos->suspend);
 			pos->suspend(pos);
+			handler_wdclr();
 		}
 	}
 	mutex_unlock(&early_suspend_lock);
 
 	suspend_sys_sync_queue();
+	stuck_wakelock_wdset();
 abort:
 	spin_lock_irqsave(&state_lock, irqflags);
 	if (state == SUSPEND_REQUESTED_AND_SUSPENDED)
@@ -136,13 +173,18 @@ static void late_resume(struct work_struct *work)
 			if (debug_mask & DEBUG_VERBOSE)
 				pr_info("late_resume: calling %pf\n", pos->resume);
 
+			handler_wdset(pos->resume);
 			pos->resume(pos);
+			handler_wdclr();
 		}
 	}
+
 	if (debug_mask & DEBUG_SUSPEND)
 		pr_info("late_resume: done\n");
 abort:
 	mutex_unlock(&early_suspend_lock);
+
+	stuck_wakelock_wdclr();
 }
 
 void request_suspend_state(suspend_state_t new_state)
@@ -181,3 +223,39 @@ suspend_state_t get_suspend_state(void)
 {
 	return requested_suspend_state;
 }
+
+#ifdef CONFIG_PM_DEBUG
+/**
+ *      stuck_wakelock_timeout - stuck wakelocks dump watchdog
+ *      handler
+ *
+ *      Called after early suspend to dump the stuck wake locks
+ *      clear in late resume.
+ *
+ */
+static void stuck_wakelock_timeout(unsigned long data)
+{
+	pr_info("**** active wakelocks ****\n");
+	has_wake_lock(WAKE_LOCK_SUSPEND);
+	stuck_wakelock_wdset();
+}
+
+/**
+ *      stuck_wakelock_wdset - Sets up stuck wakelocks dump
+ *      watchdog timer.
+ */
+static void stuck_wakelock_wdset()
+{
+	mod_timer(&stuck_wakelock_wd, jiffies + (HZ * 600));
+}
+
+/**
+ *      stuck_wakelock_wdclr - clears stuck wakelocks dump
+ *      watchdog timer.
+ *
+ */
+static void stuck_wakelock_wdclr(void)
+{
+	del_timer_sync(&stuck_wakelock_wd);
+}
+#endif

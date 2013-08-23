@@ -30,6 +30,7 @@
  *
  */
 
+#define REALLY_WANT_TRACEPOINTS
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -40,6 +41,8 @@
 #include <linux/swap.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
+
+#include <trace/events/memkill.h>
 
 static uint32_t lowmem_debug_level = 1;
 static int lowmem_adj[6] = {
@@ -82,6 +85,69 @@ static int test_task_flag(struct task_struct *p, int flag)
 	return 0;
 }
 
+/*
+ * The # of pages, that should be reduced for each zone, will be
+ * minfree * p. and  p = (zone_size)/total_size * 100%.
+ * Here is the algorithm of how to calculate it:
+ *
+ *     there is always such n that n/2^k < p < (n+1)/2^k
+ *     so  n = 2^k * p; and k is the precision, set it 16.
+ *
+ *     Then, minfree * p =  (minfree * n) >> k
+ */
+#define LOWMEM_ZONE_ADJ_PRECISION 16
+static int lowmem_zone_n[MAX_NR_ZONES];
+
+static void lowmem_zone_adj_init(void)
+{
+	unsigned long int total_pages;
+	unsigned long long int p;
+	struct zone *zone;
+
+	if (MAX_NR_ZONES == 1) /* if there is only one zone, just return */
+		return;
+
+	total_pages = 0;
+	for_each_zone(zone)
+		total_pages += zone->present_pages;
+
+	lowmem_print(2, "%s: total pages = %lu in %d zones\n", __func__,
+		total_pages, MAX_NR_ZONES);
+
+	for_each_zone(zone) {
+
+		p = (zone->present_pages << 10)/total_pages;
+		lowmem_zone_n[zone_idx(zone)] =
+			(int)((p << LOWMEM_ZONE_ADJ_PRECISION) >> 10);
+
+		lowmem_print(2, "%s: zone (%s, %d) present=%lu,"
+				"(0.%03lld, n=%d)\n",
+				__func__, zone->name,
+				zone_idx(zone), zone->present_pages,
+				p, lowmem_zone_n[zone_idx(zone)]);
+	}
+}
+static int lowmem_zone_adj(int min_size_indx, int high_zoneidx)
+{
+	int s, minfree, i;
+	unsigned long long t;
+
+	if (high_zoneidx >= MAX_NR_ZONES - 1)
+		return 0;
+
+	minfree = lowmem_minfree[min_size_indx];
+
+	s = 0;
+	for (i = MAX_NR_ZONES - 1; i > high_zoneidx; i--) {
+		t = (unsigned long long) minfree * lowmem_zone_n[i];
+		s += (int) t >> LOWMEM_ZONE_ADJ_PRECISION;
+	}
+
+	lowmem_print(5, "%s: original min = %d, high_indx = %d, reduce = %d\n",
+			__func__, minfree, high_zoneidx, s);
+	return s;
+}
+
 int can_use_cma_pages(gfp_t gfp_mask)
 {
 	int can_use = 0;
@@ -107,53 +173,73 @@ int can_use_cma_pages(gfp_t gfp_mask)
 	return can_use;
 }
 
+struct zone_avail {
+	unsigned long free;
+	unsigned long file;
+};
+
 
 void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					int *other_free, int *other_file,
-					int use_cma_pages)
+					int use_cma_pages,
+				struct zone_avail zall[][MAX_NR_ZONES])
 {
 	struct zone *zone;
 	struct zoneref *zoneref;
 	int zone_idx;
 
 	for_each_zone_zonelist(zone, zoneref, zonelist, MAX_NR_ZONES) {
-		if ((zone_idx = zonelist_zone_idx(zoneref)) == ZONE_MOVABLE) {
-			if (!use_cma_pages)
-				*other_free -=
-				    zone_page_state(zone, NR_FREE_CMA_PAGES);
+		struct zone_avail *za;
+		int node_idx = zone_to_nid(zone);
+
+		zone_idx = zonelist_zone_idx(zoneref);
+		za = &zall[node_idx][zone_idx];
+		za->free = zone_page_state(zone, NR_FREE_PAGES);
+		za->file = zone_page_state(zone, NR_FILE_PAGES)
+					- zone_page_state(zone, NR_SHMEM);
+		if (zone_idx == ZONE_MOVABLE) {
+			if (!use_cma_pages) {
+				unsigned long free_cma = zone_page_state(zone,
+						NR_FREE_CMA_PAGES);
+				za->free -= free_cma;
+				*other_free -= free_cma;
+			}
 			continue;
 		}
 
 		if (zone_idx > classzone_idx) {
 			if (other_free != NULL)
-				*other_free -= zone_page_state(zone,
-							       NR_FREE_PAGES);
+				*other_free -= za->free;
 			if (other_file != NULL)
-				*other_file -= zone_page_state(zone,
-							       NR_FILE_PAGES)
-					      - zone_page_state(zone, NR_SHMEM);
+				*other_file -= za->file;
+			za->free = za->file = 0;
 		} else if (zone_idx < classzone_idx) {
 			if (zone_watermark_ok(zone, 0, 0, classzone_idx, 0)) {
-				if (!use_cma_pages) {
-					*other_free -= min(
-					  zone->lowmem_reserve[classzone_idx] +
-					  zone_page_state(
-					    zone, NR_FREE_CMA_PAGES),
-					  zone_page_state(
-					    zone, NR_FREE_PAGES));
-				} else {
-					*other_free -=
+				unsigned long lowmem_reserve =
 					  zone->lowmem_reserve[classzone_idx];
+				if (!use_cma_pages) {
+					unsigned long free_cma =
+						zone_page_state(zone,
+							NR_FREE_CMA_PAGES);
+					unsigned long delta =
+						min(lowmem_reserve + free_cma,
+							za->free);
+					*other_free -= delta;
+					za->free -= delta;
+				} else {
+					*other_free -= lowmem_reserve;
+					za->free -= lowmem_reserve;
 				}
 			} else {
-				*other_free -=
-					   zone_page_state(zone, NR_FREE_PAGES);
+				*other_free -= za->free;
+				za->free = 0;
 			}
 		}
 	}
 }
 
-void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc)
+void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc,
+				struct zone_avail zall[][MAX_NR_ZONES])
 {
 	gfp_t gfp_mask;
 	struct zone *preferred_zone;
@@ -161,6 +247,7 @@ void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc)
 	enum zone_type high_zoneidx, classzone_idx;
 	unsigned long balance_gap;
 	int use_cma_pages;
+	struct zone_avail *za;
 
 	gfp_mask = sc->gfp_mask;
 	zonelist = node_zonelist(0, gfp_mask);
@@ -168,6 +255,7 @@ void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc)
 	first_zones_zonelist(zonelist, high_zoneidx, NULL, &preferred_zone);
 	classzone_idx = zone_idx(preferred_zone);
 	use_cma_pages = can_use_cma_pages(gfp_mask);
+	za = &zall[zone_to_nid(preferred_zone)][classzone_idx];
 
 	balance_gap = min(low_wmark_pages(preferred_zone),
 			  (preferred_zone->present_pages +
@@ -179,37 +267,41 @@ void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc)
 			  balance_gap, 0, 0))) {
 		if (lmk_fast_run)
 			tune_lmk_zone_param(zonelist, classzone_idx, other_free,
-				       other_file, use_cma_pages);
+				       other_file, use_cma_pages, zall);
 		else
 			tune_lmk_zone_param(zonelist, classzone_idx, other_free,
-				       NULL, use_cma_pages);
+				       NULL, use_cma_pages, zall);
 
 		if (zone_watermark_ok(preferred_zone, 0, 0, ZONE_HIGHMEM, 0)) {
+			unsigned long lowmem_reserve =
+				preferred_zone->lowmem_reserve[ZONE_HIGHMEM];
 			if (!use_cma_pages) {
-				*other_free -= min(
-				  preferred_zone->lowmem_reserve[ZONE_HIGHMEM]
-				  + zone_page_state(
-				    preferred_zone, NR_FREE_CMA_PAGES),
-				  zone_page_state(
-				    preferred_zone, NR_FREE_PAGES));
+				unsigned long free_cma = zone_page_state(
+					preferred_zone, NR_FREE_CMA_PAGES);
+				unsigned long delta = min(lowmem_reserve +
+					free_cma, za->free);
+				*other_free -= delta;
+				za->free -= delta;
 			} else {
-				*other_free -=
-				  preferred_zone->lowmem_reserve[ZONE_HIGHMEM];
+				*other_free -= lowmem_reserve;
+				za->free -= lowmem_reserve;
 			}
 		} else {
-			*other_free -= zone_page_state(preferred_zone,
-						      NR_FREE_PAGES);
+			*other_free -= za->free;
+			za->free = 0;
 		}
 
 		lowmem_print(4, "lowmem_shrink of kswapd tunning for highmem "
 			     "ofree %d, %d\n", *other_free, *other_file);
 	} else {
 		tune_lmk_zone_param(zonelist, classzone_idx, other_free,
-			       other_file, use_cma_pages);
+			       other_file, use_cma_pages, zall);
 
 		if (!use_cma_pages) {
-			*other_free -=
-			  zone_page_state(preferred_zone, NR_FREE_CMA_PAGES);
+			unsigned long free_cma = zone_page_state(preferred_zone,
+						NR_FREE_CMA_PAGES);
+			*other_free -= free_cma;
+			za->free -= free_cma;
 		}
 
 		lowmem_print(4, "lowmem_shrink tunning for others ofree %d, "
@@ -232,7 +324,10 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	int array_size = ARRAY_SIZE(lowmem_adj);
 	int other_free;
 	int other_file;
+	int high_zoneidx = gfp_zone(sc->gfp_mask);
+	int zone_adj;
 	unsigned long nr_to_scan = sc->nr_to_scan;
+	struct zone_avail zall[MAX_NUMNODES][MAX_NR_ZONES];
 
 	if (nr_to_scan > 0) {
 		if (mutex_lock_interruptible(&scan_mutex) < 0)
@@ -243,15 +338,19 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 	other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM);
 
-	tune_lmk_param(&other_free, &other_file, sc);
+	memset(zall, 0, sizeof(zall));
+	tune_lmk_param(&other_free, &other_file, sc, zall);
 
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-		if (other_free < lowmem_minfree[i] &&
-		    other_file < lowmem_minfree[i]) {
+
+		zone_adj = lowmem_zone_adj(i, high_zoneidx);
+
+		if (other_free < (lowmem_minfree[i] - zone_adj) &&
+		    other_file < (lowmem_minfree[i] - zone_adj)) {
 			min_score_adj = lowmem_adj[i];
 			break;
 		}
@@ -306,6 +405,11 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			task_unlock(p);
 			continue;
 		}
+		if (fatal_signal_pending(p)) {
+			lowmem_print(2, "skip slow dying process %d\n", p->pid);
+			task_unlock(p);
+			continue;
+		}
 		tasksize = get_mm_rss(p->mm);
 		task_unlock(p);
 		if (tasksize <= 0)
@@ -324,10 +428,30 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			     p->pid, p->comm, oom_score_adj, tasksize);
 	}
 	if (selected) {
+		int i, j;
+		char zinfo[ZINFO_LENGTH];
+		char *p = zinfo;
 		lowmem_print(1, "send sigkill to %d (%s), adj %d, size %d\n",
 			     selected->pid, selected->comm,
 			     selected_oom_score_adj, selected_tasksize);
 		lowmem_deathpending_timeout = jiffies + HZ;
+
+		/* Due to MotoCare parser can't handle unfixed column,
+		 * show all zones info even its free & file are zero.
+		 * it will show as the following examples:
+		 *   0:0:756:1127 0:1:0:0 0:2:0:0
+		 *   0:0:767:322 0:1:152:2364 0:2:0:0
+		 */
+		for (i = 0; i < MAX_NUMNODES; i++)
+			for (j = 0; j < MAX_NR_ZONES; j++)
+				p += snprintf(p, ZINFO_DIGITS,
+					"%d:%d:%lu:%lu ", i, j,
+					zall[i][j].free,
+					zall[i][j].file);
+
+		trace_lmk_kill(selected->pid, selected->comm,
+				selected_oom_score_adj, selected_tasksize,
+				min_score_adj, sc->gfp_mask, zinfo);
 		send_sig(SIGKILL, selected, 0);
 		set_tsk_thread_flag(selected, TIF_MEMDIE);
 		rem -= selected_tasksize;
@@ -351,6 +475,9 @@ static struct shrinker lowmem_shrinker = {
 static int __init lowmem_init(void)
 {
 	register_shrinker(&lowmem_shrinker);
+
+	lowmem_zone_adj_init();
+
 	return 0;
 }
 

@@ -20,6 +20,8 @@
 #include "devices.h"
 #include "board-8960.h"
 
+#include "board-mmi.h"
+
 #ifdef CONFIG_MSM_CAMERA
 
 #ifdef CONFIG_MSM_CAMERA_FLASH
@@ -293,7 +295,7 @@ static struct msm_bus_vectors cam_video_vectors[] = {
 		.src = MSM_BUS_MASTER_VFE,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 600000000,
-		.ib  = 2656000000UL,
+		.ib  = 4264000000UL,
 	},
 	{
 		.src = MSM_BUS_MASTER_VPE,
@@ -326,7 +328,7 @@ static struct msm_bus_vectors cam_snapshot_vectors[] = {
 		.src = MSM_BUS_MASTER_VFE,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 600000000,
-		.ib  = 2656000000UL,
+		.ib  = 4264000000UL,
 	},
 	{
 		.src = MSM_BUS_MASTER_VPE,
@@ -359,7 +361,7 @@ static struct msm_bus_vectors cam_zsl_vectors[] = {
 		.src = MSM_BUS_MASTER_VFE,
 		.dst = MSM_BUS_SLAVE_EBI_CH0,
 		.ab  = 600000000,
-		.ib  = 2656000000UL,
+		.ib  = 4264000000UL,
 	},
 	{
 		.src = MSM_BUS_MASTER_VPE,
@@ -492,7 +494,7 @@ static struct msm_bus_scale_pdata cam_bus_client_pdata = {
 		.name = "msm_camera",
 };
 
-static struct msm_camera_device_platform_data msm_camera_csi_device_data[] = {
+struct msm_camera_device_platform_data msm_camera_csi_device_data[] = {
 	{
 		.csid_core = 0,
 		.is_vpe    = 1,
@@ -829,6 +831,11 @@ static struct platform_device msm_camera_server = {
 
 void __init msm8960_init_cam(void)
 {
+	struct mmi_oem_data *mmi_data = msm8960_oem_funcs.oem_data;
+
+	if(!mmi_data || !mmi_data->mmi_camera)
+		msm_gpiomux_install(msm8960_cam_common_configs,
+				ARRAY_SIZE(msm8960_cam_common_configs));
 	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE) {
 		msm_8960_front_cam_gpio_conf.cam_gpiomux_conf_tbl =
 			msm8960_cam_2d_configs_sglte;
@@ -839,8 +846,6 @@ void __init msm8960_init_cam(void)
 		msm_8960_back_cam_gpio_conf.cam_gpiomux_conf_tbl_size =
 			ARRAY_SIZE(msm8960_cam_2d_configs_sglte);
 	}
-	msm_gpiomux_install(msm8960_cam_common_configs,
-			ARRAY_SIZE(msm8960_cam_common_configs));
 
 	if (machine_is_msm8960_cdp()) {
 		msm_gpiomux_install(msm8960_cdp_flash_configs,

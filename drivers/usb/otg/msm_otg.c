@@ -27,6 +27,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/of.h>
 #include <linux/dma-mapping.h>
+#include <linux/gpio.h>
 
 #include <linux/usb.h>
 #include <linux/usb/otg.h>
@@ -42,6 +43,7 @@
 #include <linux/power_supply.h>
 #include <linux/mhl_8334.h>
 #include <linux/slimport.h>
+#include <linux/reboot.h>
 
 #include <asm/mach-types.h>
 
@@ -1153,7 +1155,7 @@ static void msm_otg_notify_charger(struct msm_otg *motg, unsigned mA)
 	 *  to legacy pm8921 API.
 	 */
 	if (msm_otg_notify_power_supply(motg, mA))
-		pm8921_charger_vbus_draw(mA);
+	pm8921_charger_vbus_draw(mA);
 
 	motg->cur_power = mA;
 }
@@ -1572,7 +1574,11 @@ static bool msm_chg_mhl_detect(struct msm_otg *motg)
 	id = irq_read_line(motg->pdata->pmic_id_irq);
 	local_irq_restore(flags);
 
-	if (id)
+	/* The following check is to escape from doing MHL detection
+	 * if ID is no more grounded. It depends on ID interrupt's
+	 * current state as well as active logic.
+	 */
+	if (id ^ motg->pdata->pmic_id_irq_active_high)
 		return false;
 
 	mhl_det_in_progress = true;
@@ -2168,7 +2174,7 @@ static void msm_chg_detect_work(struct work_struct *w)
 		 */
 		udelay(100);
 		msm_chg_enable_aca_intr(motg);
-		dev_dbg(phy->dev, "chg_type = %s\n",
+		dev_info(phy->dev, "chg_type = %s\n",
 			chg_to_string(motg->chg_type));
 		queue_work(system_nrt_wq, &motg->sm_work);
 		return;
@@ -2218,7 +2224,10 @@ static void msm_otg_init_sm(struct msm_otg *motg)
 			if (pdata->pmic_id_irq) {
 				unsigned long flags;
 				local_irq_save(flags);
-				if (irq_read_line(pdata->pmic_id_irq))
+				if ((irq_read_line(pdata->pmic_id_irq) ^
+					pdata->pmic_id_irq_active_high) ||
+				    !(gpio_get_value(pdata->pmic_id_flt_gpio) ^
+				      pdata->pmic_id_flt_gpio_active_high))
 					set_bit(ID, &motg->inputs);
 				else
 					clear_bit(ID, &motg->inputs);
@@ -2987,6 +2996,8 @@ static void msm_otg_set_vbus_state(int online)
 	struct msm_otg *motg = the_msm_otg;
 	struct usb_otg *otg = motg->phy.otg;
 
+	dev_info(motg->phy.dev, "Vbus state = %d\n", online);
+
 	/* In A Host Mode, ignore received BSV interrupts */
 	if (otg->phy->state >= OTG_STATE_A_IDLE)
 		return;
@@ -3017,6 +3028,20 @@ static void msm_otg_set_vbus_state(int online)
 	else
 		queue_work(system_nrt_wq, &motg->sm_work);
 }
+static int factory_cable;
+static int msm_pmic_is_factory_cable(struct msm_otg *motg)
+{
+	int id_gnd = 0;
+	int id_flt = 0;
+	id_gnd = irq_read_line(motg->pdata->pmic_id_irq);
+	id_gnd ^= motg->pdata->pmic_id_irq_active_high;
+	id_flt = gpio_get_value(motg->pdata->pmic_id_flt_gpio);
+	id_flt ^= motg->pdata->pmic_id_flt_gpio_active_high;
+
+	if (!id_gnd && !id_flt)
+		return 1;
+	return 0;
+}
 
 static void msm_pmic_id_status_w(struct work_struct *w)
 {
@@ -3024,9 +3049,40 @@ static void msm_pmic_id_status_w(struct work_struct *w)
 						pmic_id_status_work.work);
 	int work = 0;
 	unsigned long flags;
+	int id_gnd = 0;
+	int id_flt = 0;
+	int factory_kill = 0;
 
 	local_irq_save(flags);
-	if (irq_read_line(motg->pdata->pmic_id_irq)) {
+	id_gnd = irq_read_line(motg->pdata->pmic_id_irq);
+	id_gnd ^= motg->pdata->pmic_id_irq_active_high;
+	id_flt = gpio_get_value(motg->pdata->pmic_id_flt_gpio);
+	id_flt ^= motg->pdata->pmic_id_flt_gpio_active_high;
+
+	pr_debug("PMIC: ID GND %d\n", id_gnd);
+	pr_debug("PMIC: ID FLT %d\n", id_flt);
+
+	if (!id_gnd && !id_flt) {
+		pr_info_once("Factory Cable Attached!\n");
+		factory_cable = 1;
+	} else
+		if (factory_cable) {
+			pr_info("Factory Cable Detached!\n");
+			factory_kill = motg->pdata->check_factory_kill ?
+					!motg->pdata->check_factory_kill() : 1;
+
+			if (factory_kill) {
+				pr_info_once("2 sec to power off.\n");
+				local_irq_restore(flags);
+				kernel_halt();
+				return;
+			} else {
+				factory_cable = 0;
+				pr_info("Factory Kill Disabled!\n");
+			}
+		}
+
+	if (id_gnd || !id_flt) {
 		if (!test_and_set_bit(ID, &motg->inputs)) {
 			pr_debug("PMIC: ID set\n");
 			work = 1;
@@ -3453,6 +3509,42 @@ static int msm_otg_setup_devices(struct platform_device *ofdev,
 	return retval;
 }
 
+static ssize_t
+get_id_gnd(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct msm_otg *motg = dev_get_drvdata(dev);
+	int id_gnd = irq_read_line(motg->pdata->pmic_id_irq);
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			id_gnd);
+}
+
+static DEVICE_ATTR(id_gnd, S_IRUGO, get_id_gnd, NULL);
+
+static ssize_t
+get_id_flt(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct msm_otg *motg = dev_get_drvdata(dev);
+	int id_flt = gpio_get_value(motg->pdata->pmic_id_flt_gpio);
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			id_flt);
+}
+
+static DEVICE_ATTR(id_flt, S_IRUGO, get_id_flt, NULL);
+
+static struct attribute *idstate_attrs[] = {
+	&dev_attr_id_gnd.attr,
+	&dev_attr_id_flt.attr,
+	NULL,
+};
+
+static struct attribute_group idstate_attr_group = {
+	.name = "idstate",
+	.attrs = idstate_attrs,
+};
+
+
 struct msm_otg_platform_data *msm_otg_dt_to_pdata(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
@@ -3736,6 +3828,13 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 
 	if (motg->pdata->mode == USB_OTG &&
 		motg->pdata->otg_control == OTG_PMIC_CONTROL) {
+		ret = sysfs_create_group(&pdev->dev.kobj, &idstate_attr_group);
+		if (ret) {
+			dev_err(&pdev->dev, "Can't register sysfs attr group:"
+				"%d\n", ret);
+			goto remove_phy;
+		}
+
 		if (motg->pdata->pmic_id_irq) {
 			ret = request_irq(motg->pdata->pmic_id_irq,
 						msm_pmic_id_irq,
@@ -3744,12 +3843,24 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 						"msm_otg", motg);
 			if (ret) {
 				dev_err(&pdev->dev, "request irq failed for PMIC ID\n");
-				goto remove_phy;
+				goto remove_sysfs;
+			}
+
+			if (motg->pdata->pmic_id_flt_gpio) {
+				int id_flt = motg->pdata->pmic_id_flt_gpio;
+				ret = gpio_request_one(id_flt,
+						       GPIOF_IN,
+						       "msm_otg_id_flt");
+				if (ret) {
+					dev_err(&pdev->dev,
+						"PMIC ID FLT request fail\n");
+					goto free_pmic_id_irq;
+				}
 			}
 		} else {
 			ret = -ENODEV;
 			dev_err(&pdev->dev, "PMIC IRQ for ID notifications doesn't exist\n");
-			goto remove_phy;
+			goto remove_sysfs;
 		}
 	}
 
@@ -3795,8 +3906,14 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 			debug_bus_voting_enabled = true;
 	}
 
+	factory_cable = msm_pmic_is_factory_cable(motg);
+
 	return 0;
 
+free_pmic_id_irq:
+	free_irq(motg->pdata->pmic_id_irq, motg);
+remove_sysfs:
+	sysfs_remove_group(&pdev->dev.kobj, &idstate_attr_group);
 remove_phy:
 	usb_set_transceiver(NULL);
 free_async_irq:
@@ -3850,8 +3967,12 @@ static int __devexit msm_otg_remove(struct platform_device *pdev)
 
 	if (pdev->dev.of_node)
 		msm_otg_setup_devices(pdev, motg->pdata->mode, false);
-	if (motg->pdata->otg_control == OTG_PMIC_CONTROL)
+	if (motg->pdata->otg_control == OTG_PMIC_CONTROL) {
+		if (motg->pdata->mode == USB_OTG)
+			sysfs_remove_group(&pdev->dev.kobj,
+						&idstate_attr_group);
 		pm8921_charger_unregister_vbus_sn(0);
+	}
 	msm_otg_mhl_register_callback(motg, NULL);
 	msm_otg_debugfs_cleanup();
 	cancel_delayed_work_sync(&motg->chg_work);
@@ -3868,6 +3989,8 @@ static int __devexit msm_otg_remove(struct platform_device *pdev)
 	msm_hsusb_mhl_switch_enable(motg, 0);
 	if (motg->pdata->pmic_id_irq)
 		free_irq(motg->pdata->pmic_id_irq, motg);
+	if (motg->pdata->pmic_id_flt_gpio)
+		gpio_free(motg->pdata->pmic_id_flt_gpio);
 	usb_set_transceiver(NULL);
 	free_irq(motg->irq, motg);
 

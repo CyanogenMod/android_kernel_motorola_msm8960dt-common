@@ -37,6 +37,8 @@ extern u32 mdp_bw_ib_factor;
 #define MDP4_BW_IB_DEFAULT_FACTOR (125)	/* 1.25 */
 #define MDP_BUS_SCALE_AB_STEP (0x4000000)
 
+#define WAIT_TOUT       (HZ/2) /* 500smec */
+
 #define MDP4_OVERLAYPROC0_BASE	0x10000
 #define MDP4_OVERLAYPROC1_BASE	0x18000
 #define MDP4_OVERLAYPROC2_BASE	0x88000
@@ -643,6 +645,8 @@ void mdp4_lcdc_wait4vsync(int cndx);
 void mdp4_overlay_lcdc_vsync_push(struct msm_fb_data_type *mfd,
 				struct mdp4_overlay_pipe *pipe);
 void mdp4_mddi_overlay_dmas_restore(void);
+void mdp4_dsi_panel_on(struct msm_fb_data_type *mfd);
+void mdp4_dsi_panel_off(struct msm_fb_data_type *mfd);
 
 #ifndef CONFIG_FB_MSM_MIPI_DSI
 void mdp4_mddi_dma_busy_wait(struct msm_fb_data_type *mfd);
@@ -794,7 +798,7 @@ int mdp4_dsi_cmd_on(struct platform_device *pdev);
 int mdp4_dsi_cmd_off(struct platform_device *pdev);
 int mdp4_dsi_video_off(struct platform_device *pdev);
 int mdp4_dsi_video_on(struct platform_device *pdev);
-int mdp4_dsi_video_splash_done(void);
+int mdp4_dsi_video_splash_done(struct platform_device *pdev);
 void mdp4_primary_vsync_dsi_video(void);
 void mdp4_dsi_cmd_base_swap(int cndx, struct mdp4_overlay_pipe *pipe);
 void mdp4_dsi_cmd_wait4vsync(int cndx);
@@ -865,7 +869,7 @@ static inline void mdp4_overlay_dsi_video_start(void)
 	/* empty */
 }
 
-static int mdp4_dsi_video_splash_done(void)
+static int mdp4_dsi_video_splash_done(struct platform_device *pdev)
 {
 }
 #endif /* CONFIG_FB_MSM_MIPI_DSI */
@@ -986,4 +990,52 @@ static inline void mdp4_unmap_sec_resource(struct msm_fb_data_type *mfd);
 	return 0;
 }
 #endif
+
+#define COMMIT_HIST_TBL_SIZE 20
+
+/*having a struct in case further info needs to be added*/
+struct mdp4_commit_hist_tbl {
+	uint32 commit_cnt;
+	int32_t stage_commit;
+};
+
+void mdp4_stats_dump(struct mdp4_statistic stat);
+void mdp4_store_commit_info(void);
+void mdp4_dump_commit_info(void);
+void mdp4_regs_dump(void);
+void mdp4_hang_dump(const char *hang_type);
+void mdp4_dump_vsync_ctrl(void);
+
+extern char *mdp4_hang_data;
+extern u32 mdp4_hang_data_pos;
+extern void mdp4_hang_init(void);
+extern u8 mdp4_dmap_timeout_counter[];
+
+#define MDP_DUMP_SIZE (4*PAGE_SIZE)
+#define MDP4_HANG_DUMP(fmt, args...) \
+	do { \
+		if (mdp4_hang_data != NULL) { \
+			mdp4_hang_data_pos += scnprintf( \
+				&mdp4_hang_data[mdp4_hang_data_pos], \
+				MDP_DUMP_SIZE-mdp4_hang_data_pos-1, \
+				fmt, ##args); \
+			if (mdp4_hang_data_pos > 0 && \
+				mdp4_hang_data[mdp4_hang_data_pos-1] != '\n') \
+				mdp4_hang_data_pos += scnprintf( \
+					&mdp4_hang_data[mdp4_hang_data_pos], \
+					MDP_DUMP_SIZE-mdp4_hang_data_pos-1, \
+					"\n"); \
+		} \
+	} while (0)
+
+#define MDP4_HANG_LOG(fmt, args...) \
+	do { \
+		pr_err(fmt, ##args); \
+		MDP4_HANG_DUMP(fmt, ##args); \
+	} while (0)
+
+#define DMAP_TIMEOUT (HZ/10) /* 100 ms */
+#define MAX_DMAP_TIMEOUTS 4
+#define DMAP_TIMEOUT_BUG_COUNT 5
+
 #endif /* MDP_H */

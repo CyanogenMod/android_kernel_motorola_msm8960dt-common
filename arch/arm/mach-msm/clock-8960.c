@@ -380,6 +380,16 @@ enum vdd_dig_levels {
 	VDD_DIG_NUM
 };
 
+unsigned long __cpuinit calibrate_delay_is_known(void)
+{
+	if (cpu_is_msm8960ab()) {
+		pr_info("Using known delay for msm8960ab as:");
+		/* lpj/bogomips printed on same line in calibrate_delay() */
+		return 67660;
+	}
+	return 0;
+}
+
 static int set_vdd_dig_8960(struct clk_vdd_class *vdd_class, int level)
 {
 	static const int vdd_uv[] = {
@@ -410,20 +420,20 @@ static int set_vdd_dig_8930(struct clk_vdd_class *vdd_class, int level)
 }
 
 #define VDD_DIG_FMAX_MAP1(l1, f1) \
-	.vdd_class = &vdd_dig,			\
+	.vdd_class = &vdd_dig, \
 	.fmax = (unsigned long[VDD_DIG_NUM]) {	\
 		[VDD_DIG_##l1] = (f1),		\
 	},					\
 	.num_fmax = VDD_DIG_NUM
 #define VDD_DIG_FMAX_MAP2(l1, f1, l2, f2) \
-	.vdd_class = &vdd_dig,			\
+	.vdd_class = &vdd_dig, \
 	.fmax = (unsigned long[VDD_DIG_NUM]) {	\
 		[VDD_DIG_##l1] = (f1),		\
 		[VDD_DIG_##l2] = (f2),		\
 	},					\
 	.num_fmax = VDD_DIG_NUM
 #define VDD_DIG_FMAX_MAP3(l1, f1, l2, f2, l3, f3) \
-	.vdd_class = &vdd_dig,			\
+	.vdd_class = &vdd_dig, \
 	.fmax = (unsigned long[VDD_DIG_NUM]) {	\
 		[VDD_DIG_##l1] = (f1),		\
 		[VDD_DIG_##l2] = (f2),		\
@@ -1337,18 +1347,18 @@ static struct clk_freq_tbl clk_tbl_gsbi_uart[] = {
 	F_END
 };
 
-static CLK_GSBI_UART(gsbi1_uart,   1, CLK_HALT_CFPB_STATEA_REG, 10);
-static CLK_GSBI_UART(gsbi2_uart,   2, CLK_HALT_CFPB_STATEA_REG,  6);
-static CLK_GSBI_UART(gsbi3_uart,   3, CLK_HALT_CFPB_STATEA_REG,  2);
-static CLK_GSBI_UART(gsbi4_uart,   4, CLK_HALT_CFPB_STATEB_REG, 26);
-static CLK_GSBI_UART(gsbi5_uart,   5, CLK_HALT_CFPB_STATEB_REG, 22);
-static CLK_GSBI_UART(gsbi6_uart,   6, CLK_HALT_CFPB_STATEB_REG, 18);
-static CLK_GSBI_UART(gsbi7_uart,   7, CLK_HALT_CFPB_STATEB_REG, 14);
-static CLK_GSBI_UART(gsbi8_uart,   8, CLK_HALT_CFPB_STATEB_REG, 10);
-static CLK_GSBI_UART(gsbi9_uart,   9, CLK_HALT_CFPB_STATEB_REG,  6);
-static CLK_GSBI_UART(gsbi10_uart, 10, CLK_HALT_CFPB_STATEB_REG,  2);
-static CLK_GSBI_UART(gsbi11_uart, 11, CLK_HALT_CFPB_STATEC_REG, 17);
-static CLK_GSBI_UART(gsbi12_uart, 12, CLK_HALT_CFPB_STATEC_REG, 13);
+CLK_GSBI_UART(gsbi1_uart,   1, CLK_HALT_CFPB_STATEA_REG, 10);
+CLK_GSBI_UART(gsbi2_uart,   2, CLK_HALT_CFPB_STATEA_REG,  6);
+CLK_GSBI_UART(gsbi3_uart,   3, CLK_HALT_CFPB_STATEA_REG,  2);
+CLK_GSBI_UART(gsbi4_uart,   4, CLK_HALT_CFPB_STATEB_REG, 26);
+CLK_GSBI_UART(gsbi5_uart,   5, CLK_HALT_CFPB_STATEB_REG, 22);
+CLK_GSBI_UART(gsbi6_uart,   6, CLK_HALT_CFPB_STATEB_REG, 18);
+CLK_GSBI_UART(gsbi7_uart,   7, CLK_HALT_CFPB_STATEB_REG, 14);
+CLK_GSBI_UART(gsbi8_uart,   8, CLK_HALT_CFPB_STATEB_REG, 10);
+CLK_GSBI_UART(gsbi9_uart,   9, CLK_HALT_CFPB_STATEB_REG,  6);
+CLK_GSBI_UART(gsbi10_uart, 10, CLK_HALT_CFPB_STATEB_REG,  2);
+CLK_GSBI_UART(gsbi11_uart, 11, CLK_HALT_CFPB_STATEC_REG, 17);
+CLK_GSBI_UART(gsbi12_uart, 12, CLK_HALT_CFPB_STATEC_REG, 13);
 
 #define CLK_GSBI_QUP(i, n, h_r, h_b) \
 	struct rcg_clk i##_clk = { \
@@ -1396,18 +1406,18 @@ static struct clk_freq_tbl clk_tbl_gsbi_qup[] = {
 	F_END
 };
 
-static CLK_GSBI_QUP(gsbi1_qup,   1, CLK_HALT_CFPB_STATEA_REG,  9);
-static CLK_GSBI_QUP(gsbi2_qup,   2, CLK_HALT_CFPB_STATEA_REG,  4);
-static CLK_GSBI_QUP(gsbi3_qup,   3, CLK_HALT_CFPB_STATEA_REG,  0);
-static CLK_GSBI_QUP(gsbi4_qup,   4, CLK_HALT_CFPB_STATEB_REG, 24);
-static CLK_GSBI_QUP(gsbi5_qup,   5, CLK_HALT_CFPB_STATEB_REG, 20);
-static CLK_GSBI_QUP(gsbi6_qup,   6, CLK_HALT_CFPB_STATEB_REG, 16);
-static CLK_GSBI_QUP(gsbi7_qup,   7, CLK_HALT_CFPB_STATEB_REG, 12);
-static CLK_GSBI_QUP(gsbi8_qup,   8, CLK_HALT_CFPB_STATEB_REG,  8);
-static CLK_GSBI_QUP(gsbi9_qup,   9, CLK_HALT_CFPB_STATEB_REG,  4);
-static CLK_GSBI_QUP(gsbi10_qup, 10, CLK_HALT_CFPB_STATEB_REG,  0);
-static CLK_GSBI_QUP(gsbi11_qup, 11, CLK_HALT_CFPB_STATEC_REG, 15);
-static CLK_GSBI_QUP(gsbi12_qup, 12, CLK_HALT_CFPB_STATEC_REG, 11);
+CLK_GSBI_QUP(gsbi1_qup,   1, CLK_HALT_CFPB_STATEA_REG,  9);
+CLK_GSBI_QUP(gsbi2_qup,   2, CLK_HALT_CFPB_STATEA_REG,  4);
+CLK_GSBI_QUP(gsbi3_qup,   3, CLK_HALT_CFPB_STATEA_REG,  0);
+CLK_GSBI_QUP(gsbi4_qup,   4, CLK_HALT_CFPB_STATEB_REG, 24);
+CLK_GSBI_QUP(gsbi5_qup,   5, CLK_HALT_CFPB_STATEB_REG, 20);
+CLK_GSBI_QUP(gsbi6_qup,   6, CLK_HALT_CFPB_STATEB_REG, 16);
+CLK_GSBI_QUP(gsbi7_qup,   7, CLK_HALT_CFPB_STATEB_REG, 12);
+CLK_GSBI_QUP(gsbi8_qup,   8, CLK_HALT_CFPB_STATEB_REG,  8);
+CLK_GSBI_QUP(gsbi9_qup,   9, CLK_HALT_CFPB_STATEB_REG,  4);
+CLK_GSBI_QUP(gsbi10_qup, 10, CLK_HALT_CFPB_STATEB_REG,  0);
+CLK_GSBI_QUP(gsbi11_qup, 11, CLK_HALT_CFPB_STATEC_REG, 15);
+CLK_GSBI_QUP(gsbi12_qup, 12, CLK_HALT_CFPB_STATEC_REG, 11);
 
 #define F_PDM(f, s, d) \
 	{ \
@@ -2164,7 +2174,7 @@ static struct branch_clk dma_bam_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi1_p_clk = {
+struct branch_clk gsbi1_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(1),
 		.en_mask = BIT(4),
@@ -2180,7 +2190,7 @@ static struct branch_clk gsbi1_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi2_p_clk = {
+struct branch_clk gsbi2_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(2),
 		.en_mask = BIT(4),
@@ -2196,7 +2206,7 @@ static struct branch_clk gsbi2_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi3_p_clk = {
+struct branch_clk gsbi3_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(3),
 		.en_mask = BIT(4),
@@ -2212,7 +2222,7 @@ static struct branch_clk gsbi3_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi4_p_clk = {
+struct branch_clk gsbi4_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(4),
 		.en_mask = BIT(4),
@@ -2228,7 +2238,7 @@ static struct branch_clk gsbi4_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi5_p_clk = {
+struct branch_clk gsbi5_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(5),
 		.en_mask = BIT(4),
@@ -2244,7 +2254,7 @@ static struct branch_clk gsbi5_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi6_p_clk = {
+struct branch_clk gsbi6_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(6),
 		.en_mask = BIT(4),
@@ -2260,7 +2270,7 @@ static struct branch_clk gsbi6_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi7_p_clk = {
+struct branch_clk gsbi7_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(7),
 		.en_mask = BIT(4),
@@ -2276,7 +2286,7 @@ static struct branch_clk gsbi7_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi8_p_clk = {
+struct branch_clk gsbi8_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(8),
 		.en_mask = BIT(4),
@@ -2292,7 +2302,7 @@ static struct branch_clk gsbi8_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi9_p_clk = {
+struct branch_clk gsbi9_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(9),
 		.en_mask = BIT(4),
@@ -2308,7 +2318,7 @@ static struct branch_clk gsbi9_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi10_p_clk = {
+struct branch_clk gsbi10_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(10),
 		.en_mask = BIT(4),
@@ -2324,7 +2334,7 @@ static struct branch_clk gsbi10_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi11_p_clk = {
+struct branch_clk gsbi11_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(11),
 		.en_mask = BIT(4),
@@ -2340,7 +2350,7 @@ static struct branch_clk gsbi11_p_clk = {
 	},
 };
 
-static struct branch_clk gsbi12_p_clk = {
+struct branch_clk gsbi12_p_clk = {
 	.b = {
 		.ctl_reg = GSBIn_HCLK_CTL_REG(12),
 		.en_mask = BIT(4),
@@ -2699,9 +2709,9 @@ static struct clk_freq_tbl clk_tbl_cam[] = {
 	F_END
 };
 
-static CLK_CAM(cam0_clk, 0, 15);
-static CLK_CAM(cam1_clk, 1, 16);
-static CLK_CAM(cam2_clk, 2, 31);
+CLK_CAM(cam0_clk, 0, 15);
+CLK_CAM(cam1_clk, 1, 16);
+CLK_CAM(cam2_clk, 2, 31);
 
 #define F_CSI(f, s, d, m, n) \
 	{ \
@@ -3512,23 +3522,23 @@ static struct rcg_clk gfx2d1_clk = {
 
 /*Shared by 8064, 8930, and 8960ab*/
 static struct clk_freq_tbl clk_tbl_gfx3d[] = {
-	F_GFX3D(        0, gnd,   0,  0),
-	F_GFX3D( 27000000, pxo,   0,  0),
-	F_GFX3D( 48000000, pll8,  1,  8),
-	F_GFX3D( 54857000, pll8,  1,  7),
-	F_GFX3D( 64000000, pll8,  1,  6),
-	F_GFX3D( 76800000, pll8,  1,  5),
-	F_GFX3D( 96000000, pll8,  1,  4),
-	F_GFX3D(128000000, pll8,  1,  3),
-	F_GFX3D(145455000, pll2,  2, 11),
-	F_GFX3D(160000000, pll2,  1,  5),
-	F_GFX3D(177778000, pll2,  2,  9),
+	F_GFX3D(        0, gnd,  0,  0),
+	F_GFX3D( 27000000, pxo,  0,  0),
+	F_GFX3D( 48000000, pll8, 1,  8),
+	F_GFX3D( 54857000, pll8, 1,  7),
+	F_GFX3D( 64000000, pll8, 1,  6),
+	F_GFX3D( 76800000, pll8, 1,  5),
+	F_GFX3D( 96000000, pll8, 1,  4),
+	F_GFX3D(128000000, pll8, 1,  3),
+	F_GFX3D(145455000, pll2, 2, 11),
+	F_GFX3D(160000000, pll2, 1,  5),
+	F_GFX3D(177778000, pll2, 2,  9),
 	F_GFX3D(192000000, pll8,  1,  2),
-	F_GFX3D(200000000, pll2,  1,  4),
-	F_GFX3D(228571000, pll2,  2,  7),
-	F_GFX3D(266667000, pll2,  1,  3),
-	F_GFX3D(320000000, pll2,  2,  5),
-	F_GFX3D(400000000, pll2,  1,  2),
+	F_GFX3D(200000000, pll2, 1,  4),
+	F_GFX3D(228571000, pll2, 2,  7),
+	F_GFX3D(266667000, pll2, 1,  3),
+	F_GFX3D(320000000, pll2, 2,  5),
+	F_GFX3D(400000000, pll2, 1,  2),
 	F_GFX3D(450000000, pll15, 1,  2),
 	F_END
 };
@@ -4821,7 +4831,6 @@ static DEFINE_CLK_VOTER(ebi1_msmbus_a_clk, &ebi1_a_clk.c, LONG_MAX);
 static DEFINE_CLK_VOTER(afab_acpu_a_clk, &afab_a_clk.c, LONG_MAX);
 static DEFINE_CLK_VOTER(afab_msmbus_a_clk, &afab_a_clk.c, LONG_MAX);
 
-#ifdef CONFIG_DEBUG_FS
 struct measure_sel {
 	u32 test_vector;
 	struct clk *c;
@@ -4836,6 +4845,7 @@ static DEFINE_CLK_MEASURE(q6sw_clk);
 static DEFINE_CLK_MEASURE(q6fw_clk);
 static DEFINE_CLK_MEASURE(q6_func_clk);
 
+#ifdef CONFIG_DEBUG_FS
 static struct measure_sel measure_mux[] = {
 	{ TEST_PER_LS(0x08), &slimbus_xo_src_clk.c },
 	{ TEST_PER_LS(0x12), &sdc1_p_clk.c },

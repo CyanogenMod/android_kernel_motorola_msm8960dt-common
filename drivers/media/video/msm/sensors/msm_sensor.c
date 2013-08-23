@@ -599,6 +599,50 @@ int32_t msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 			else
 				rc = -EFAULT;
 			break;
+		case CFG_GET_MODULE_INFO:
+			if (s_ctrl->func_tbl->sensor_get_module_info == NULL) {
+				pr_err("%s: sensor_get_module_info is null!\n",
+					__func__);
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->sensor_get_module_info(s_ctrl);
+			if (rc < 0) {
+				pr_err("%s: Unable to get mdoule info!\n",
+						__func__);
+				break;
+			}
+
+			if (copy_to_user((void *)cdata.cfg.module_info.otp_info,
+						s_ctrl->sensor_otp.otp_info,
+						s_ctrl->sensor_otp.size)) {
+				pr_err("%s: error copying otp buffer to user\n",
+						__func__);
+				rc = -EFAULT;
+				break;
+			}
+
+			cdata.cfg.module_info.size = s_ctrl->sensor_otp.size;
+			cdata.cfg.module_info.hw_rev =
+				s_ctrl->sensor_otp.hw_rev;
+			cdata.cfg.module_info.asic_rev =
+				s_ctrl->sensor_otp.asic_rev;
+
+			if (copy_to_user((void *)argp,
+					&cdata,
+					sizeof(struct sensor_cfg_data))) {
+				pr_err("%s: Unable to copy otp back to user\n",
+						__func__);
+				rc = -EFAULT;
+			}
+			break;
+		case CFG_SET_STROBE:
+			if (s_ctrl->func_tbl->sensor_ctrl_strobe)
+				rc = s_ctrl->func_tbl->sensor_ctrl_strobe(
+					s_ctrl, cdata.cfg.enable_strobe);
+			else
+				rc = -EFAULT;
+				break;
 		default:
 			rc = -EFAULT;
 			break;

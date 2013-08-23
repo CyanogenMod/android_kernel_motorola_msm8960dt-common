@@ -339,6 +339,7 @@ void mdp4_dtv_wait4vsync(int cndx)
 	struct vsycn_ctrl *vctrl;
 	struct mdp4_overlay_pipe *pipe;
 	unsigned long flags;
+	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -360,7 +361,17 @@ void mdp4_dtv_wait4vsync(int cndx)
 	vctrl->wait_vsync_cnt++;
 	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 
-	wait_for_completion(&vctrl->vsync_comp);
+	if (wait_for_completion_timeout(&vctrl->vsync_comp, WAIT_TOUT) == 0) {
+		pr_err("%s: TIMEOUT\n", __func__);
+		timeout_occurred[cndx] = 1;
+		mdp4_hang_dump(__func__);
+	} else {
+		if (timeout_occurred[cndx])
+			pr_info("%s: recovered from previous timeout\n",
+				__func__);
+		timeout_occurred[cndx] = 0;
+	}
+
 	mdp4_dtv_vsync_irq_ctrl(cndx, 0);
 	mdp4_stat.wait4vsync1++;
 }
@@ -368,6 +379,8 @@ void mdp4_dtv_wait4vsync(int cndx)
 static void mdp4_dtv_wait4dmae(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
+	int retries = MAX_DMAP_TIMEOUTS;
+	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -379,7 +392,29 @@ static void mdp4_dtv_wait4dmae(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	wait_for_completion(&vctrl->dmae_comp);
+	while (retries) {
+		if (wait_for_completion_timeout(&vctrl->dmae_comp,
+						WAIT_TOUT) == 0) {
+			pr_err("%s: TIMEOUT (retries left: %d)\n", __func__,
+				retries);
+			timeout_occurred[cndx] = 1;
+			/* only dump the hang once */
+			if (retries == MAX_DMAP_TIMEOUTS)
+				mdp4_hang_dump(__func__);
+		} else {
+			if (timeout_occurred[cndx])
+				pr_info("%s: recovered from previous timeout\n",
+					__func__);
+			timeout_occurred[cndx] = 0;
+			break;
+		}
+		retries--;
+	}
+
+	/* Timeouts will continue forever, BUG out until we come up with a good
+	   way to recover the state of the MDP subsystem */
+	if (!retries)
+		BUG();
 }
 
 ssize_t mdp4_dtv_show_event(struct device *dev,

@@ -30,11 +30,11 @@
 
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MSM_FB_PRIM_BUF_SIZE \
-		(roundup((roundup(1920, 32) * roundup(1200, 32) * 4), 4096) * 3)
+		(roundup((roundup(1280, 32) * roundup(720, 32) * 4), 4096) * 3)
 			/* 4 bpp x 3 pages */
 #else
 #define MSM_FB_PRIM_BUF_SIZE \
-		(roundup((roundup(1920, 32) * roundup(1200, 32) * 4), 4096) * 2)
+		(roundup((roundup(1280, 32) * roundup(720, 32) * 4), 4096) * 2)
 			/* 4 bpp x 2 pages */
 #endif
 
@@ -469,6 +469,7 @@ static int mipi_dsi_cdp_panel_power(int on)
 }
 
 static char mipi_dsi_splash_is_enabled(void);
+static void mipi_dsi_disable_splash(void);
 static int mipi_dsi_panel_power(int on)
 {
 	int ret;
@@ -487,6 +488,7 @@ static struct mipi_dsi_platform_data mipi_dsi_pdata = {
 	.vsync_gpio = MDP_VSYNC_GPIO,
 	.dsi_power_save = mipi_dsi_panel_power,
 	.splash_is_enabled = mipi_dsi_splash_is_enabled,
+	.disable_splash = mipi_dsi_disable_splash,
 };
 
 #ifdef CONFIG_MSM_BUS_SCALING
@@ -610,6 +612,12 @@ static char mipi_dsi_splash_is_enabled(void)
 {
 	return mdp_pdata.cont_splash_enabled;
 }
+
+static void mipi_dsi_disable_splash(void)
+{
+	mdp_pdata.cont_splash_enabled = 0;
+}
+
 
 #define LPM_CHANNEL0 0
 static int toshiba_gpio[] = {LPM_CHANNEL0};
@@ -1001,6 +1009,11 @@ void __init msm8960_init_fb(void)
 
 	if (cpu_is_msm8960ab())
 		mdp_pdata.mdp_rev = MDP_REV_44;
+
+	if (msm8960_oem_funcs.msm_display_init)
+		msm8960_oem_funcs.msm_display_init(&msm8960_oem_funcs,
+			&msm_fb_pdata,
+			&mipi_dsi_pdata);
 
 	platform_device_register(&msm_fb_device);
 

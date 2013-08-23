@@ -1,4 +1,5 @@
 /* Copyright (c) 2011-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013, Motorola Mobility LLC
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,6 +18,8 @@
 #include <linux/platform_device.h>
 #include <linux/mfd/pm8xxx/pm8921.h>
 #include <linux/slab.h>
+#include <linux/of.h>
+#include <linux/of_gpio.h>
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
@@ -26,7 +29,11 @@
 #include <mach/socinfo.h>
 #include <linux/mfd/wcd9xxx/core.h>
 #include "msm-pcm-routing.h"
+#include <sound/msm-dai-q6.h>
 #include "../codecs/wcd9310.h"
+#ifdef CONFIG_SND_SOC_TPA6165A2
+#include "../codecs/tpa6165a2-core.h"
+#endif
 
 /* 8960 machine driver */
 
@@ -61,7 +68,15 @@
 
 #define JACK_DETECT_GPIO 38
 #define JACK_DETECT_INT PM8921_GPIO_IRQ(PM8921_IRQ_BASE, JACK_DETECT_GPIO)
+
 #define JACK_US_EURO_SEL_GPIO 35
+
+struct msm8960_asoc_mach_data {
+	struct gpio *pri_i2s_gpios;
+	unsigned int num_pri_i2s_gpios;
+	struct gpio *mi2s_gpios;
+	unsigned int num_mi2s_gpios;
+};
 
 static u32 top_spk_pamp_gpio  = PM8921_GPIO_PM_TO_SYS(18);
 static u32 bottom_spk_pamp_gpio = PM8921_GPIO_PM_TO_SYS(19);
@@ -76,6 +91,13 @@ static int msm8960_btsco_ch = 1;
 static int hdmi_rate_variable;
 static int msm_hdmi_rx_ch = 2;
 static int msm8960_auxpcm_rate = SAMPLE_RATE_8KHZ;
+
+static struct clk *mi2s_rx_osr_clk;
+static struct clk *mi2s_rx_bit_clk;
+static atomic_t mi2s_rsc_ref;
+
+static struct clk *pri_i2s_tx_bit_clk;
+static struct clk *pri_i2s_tx_osr_clk;
 
 static struct clk *codec_clk;
 static int clk_users;
@@ -444,20 +466,12 @@ static const struct snd_soc_dapm_widget msm8960_dapm_widgets[] = {
 	SND_SOC_DAPM_SPK("Ext Spk Top Pos", msm8960_spkramp_event),
 	SND_SOC_DAPM_SPK("Ext Spk Top Neg", msm8960_spkramp_event),
 	SND_SOC_DAPM_SPK("Ext Spk Top", msm8960_spkramp_event),
-
-	SND_SOC_DAPM_MIC("Handset Mic", NULL),
+	SND_SOC_DAPM_MIC("Primary Mic", NULL),
+	SND_SOC_DAPM_MIC("Secondary Mic", NULL),
+	SND_SOC_DAPM_MIC("Tertiary Mic", NULL),
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic1", NULL),
 	SND_SOC_DAPM_MIC("ANCRight Headset Mic", NULL),
 	SND_SOC_DAPM_MIC("ANCLeft Headset Mic", NULL),
-
-	SND_SOC_DAPM_MIC("Digital Mic1", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic2", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic3", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic4", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic5", NULL),
-	SND_SOC_DAPM_MIC("Digital Mic6", NULL),
-
 };
 
 static const struct snd_soc_dapm_route common_audio_map[] = {
@@ -466,16 +480,22 @@ static const struct snd_soc_dapm_route common_audio_map[] = {
 	{"LDO_H", NULL, "MCLK"},
 
 	/* Speaker path */
-	{"Ext Spk Bottom Pos", NULL, "LINEOUT1"},
-	{"Ext Spk Bottom Neg", NULL, "LINEOUT3"},
+	{"Ext Spk Bottom Pos", NULL, "LINEOUT2"},
+	{"Ext Spk Bottom Neg", NULL, "LINEOUT4"},
 
-	{"Ext Spk Top Pos", NULL, "LINEOUT2"},
-	{"Ext Spk Top Neg", NULL, "LINEOUT4"},
+	{"Ext Spk Top Pos", NULL, "LINEOUT1"},
+	{"Ext Spk Top Neg", NULL, "LINEOUT3"},
 	{"Ext Spk Top", NULL, "LINEOUT5"},
 
 	/* Microphone path */
-	{"AMIC1", NULL, "MIC BIAS1 Internal1"},
-	{"MIC BIAS1 Internal1", NULL, "Handset Mic"},
+	{"AMIC3", NULL, "MIC BIAS1 External"},
+	{"MIC BIAS1 External", NULL, "Primary Mic"},
+
+	{"AMIC4", NULL, "MIC BIAS3 External"},
+	{"MIC BIAS3 External", NULL, "Secondary Mic"},
+
+	{"AMIC1", NULL, "MIC BIAS4 External"},
+	{"MIC BIAS4 External", NULL, "Tertiary Mic"},
 
 	{"AMIC2", NULL, "MIC BIAS2 External"},
 	{"MIC BIAS2 External", NULL, "Headset Mic"},
@@ -487,65 +507,47 @@ static const struct snd_soc_dapm_route common_audio_map[] = {
 	 * on FLUID.
 	 */
 	{"AMIC3", NULL, "MIC BIAS3 Internal1"},
-	{"MIC BIAS3 Internal1", NULL, "MIC BIAS2 External"},
 	{"MIC BIAS2 External", NULL, "ANCRight Headset Mic"},
+
 	{"AMIC4", NULL, "MIC BIAS1 Internal2"},
-	{"MIC BIAS1 Internal2", NULL, "MIC BIAS2 External"},
 	{"MIC BIAS2 External", NULL, "ANCLeft Headset Mic"},
 
 	{"HEADPHONE", NULL, "LDO_H"},
-
-	/**
-	 * The digital Mic routes are setup considering
-	 * fluid as default device.
-	 */
-
-	/**
-	 * Digital Mic1. Front Bottom left Digital Mic on Fluid and MTP.
-	 * Digital Mic GM5 on CDP mainboard.
-	 * Conncted to DMIC2 Input on Tabla codec.
-	 */
-	{"DMIC2", NULL, "MIC BIAS1 External"},
-	{"MIC BIAS1 External", NULL, "Digital Mic1"},
-
-	/**
-	 * Digital Mic2. Front Bottom right Digital Mic on Fluid and MTP.
-	 * Digital Mic GM6 on CDP mainboard.
-	 * Conncted to DMIC1 Input on Tabla codec.
-	 */
-	{"DMIC1", NULL, "MIC BIAS1 External"},
-	{"MIC BIAS1 External", NULL, "Digital Mic2"},
-
-	/**
-	 * Digital Mic3. Back Bottom Digital Mic on Fluid.
-	 * Digital Mic GM1 on CDP mainboard.
-	 * Conncted to DMIC4 Input on Tabla codec.
-	 */
-	{"DMIC4", NULL, "MIC BIAS3 External"},
-	{"MIC BIAS3 External", NULL, "Digital Mic3"},
-
-	/**
-	 * Digital Mic4. Back top Digital Mic on Fluid.
-	 * Digital Mic GM2 on CDP mainboard.
-	 * Conncted to DMIC3 Input on Tabla codec.
-	 */
-	{"DMIC3", NULL, "MIC BIAS3 External"},
-	{"MIC BIAS3 External", NULL, "Digital Mic4"},
-
-	/**
-	 * Digital Mic5. Front top Digital Mic on Fluid.
-	 * Digital Mic GM3 on CDP mainboard.
-	 * Conncted to DMIC5 Input on Tabla codec.
-	 */
-	{"DMIC5", NULL, "MIC BIAS4 External"},
-	{"MIC BIAS4 External", NULL, "Digital Mic5"},
-
-	/* Tabla digital Mic6 - back bottom digital Mic on Liquid and
-	 * bottom mic on CDP. FLUID/MTP do not have dmic6 installed.
-	 */
-	{"DMIC6", NULL, "MIC BIAS4 External"},
-	{"MIC BIAS4 External", NULL, "Digital Mic6"},
 };
+
+#ifdef CONFIG_SND_SOC_TPA6165A2
+static int msm8960_ext_hp_event(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *kcontrol, int event)
+{
+	if (SND_SOC_DAPM_EVENT_ON(event))
+		tpa6165_hp_event(1);
+	else
+		tpa6165_hp_event(0);
+	return 0;
+}
+
+static int msm8960_ext_mic_event(struct snd_soc_dapm_widget *w,
+		struct snd_kcontrol *kcontrol, int event)
+{
+	if (SND_SOC_DAPM_EVENT_ON(event))
+		tpa6165_mic_event(1);
+	else
+		tpa6165_mic_event(0);
+	return 0;
+}
+
+static const struct snd_soc_dapm_widget tpa6165_dapm_widgets[] = {
+	SND_SOC_DAPM_INPUT("TPA6165 Mic"),
+	SND_SOC_DAPM_MIC("TPA6165 Headset Mic", msm8960_ext_mic_event),
+	SND_SOC_DAPM_HP("TPA6165 HEADPHONE", msm8960_ext_hp_event),
+};
+
+static const struct snd_soc_dapm_route tpa6165_hp_map[] = {
+	{"TPA6165 HEADPHONE", NULL, "HEADPHONE"},
+	{"TPA6165 Mic", NULL, "MIC BIAS2 External"},
+	{"MIC BIAS2 External", NULL, "TPA6165 Headset Mic"},
+};
+#endif
 
 static const char *spk_function[] = {"Off", "On"};
 static const char *slim0_rx_ch_text[] = {"One", "Two"};
@@ -962,6 +964,11 @@ static int msm8960_audrx_init(struct snd_soc_pcm_runtime *rtd)
 
 	snd_soc_dapm_sync(dapm);
 
+	codec_clk = clk_get(cpu_dai->dev, "osr_clk");
+
+	if (machine_is_msm8960_cdp())
+		mbhc_cfg.swap_gnd_mic = msm8960_swap_gnd_mic;
+
 	err = snd_soc_jack_new(codec, "Headset Jack",
 			       (SND_JACK_HEADSET | SND_JACK_LINEOUT |
 				SND_JACK_OC_HPHL | SND_JACK_OC_HPHR |
@@ -979,10 +986,23 @@ static int msm8960_audrx_init(struct snd_soc_pcm_runtime *rtd)
 		return err;
 	}
 
-	codec_clk = clk_get(cpu_dai->dev, "osr_clk");
+#ifdef CONFIG_SND_SOC_TPA6165A2
+	err = tpa6165_hs_detect(codec, &hs_jack, &button_jack);
+	if (!err) {
+		pr_info("%s:tpa6165 hs det mechanism is used", __func__);
+		/* dapm controls for tpa6165 */
+		snd_soc_dapm_new_controls(dapm, tpa6165_dapm_widgets,
+				ARRAY_SIZE(tpa6165_dapm_widgets));
 
-	if (machine_is_msm8960_cdp())
-		mbhc_cfg.swap_gnd_mic = msm8960_swap_gnd_mic;
+		snd_soc_dapm_add_routes(dapm, tpa6165_hp_map,
+				ARRAY_SIZE(tpa6165_hp_map));
+
+		snd_soc_dapm_enable_pin(dapm, "TPA6165 HEADPHONE");
+		snd_soc_dapm_enable_pin(dapm, "TPA6165 MIC");
+		snd_soc_dapm_sync(dapm);
+		return err;
+	}
+#endif
 
 	if (hs_detect_use_gpio) {
 		mbhc_cfg.gpio = PM8921_GPIO_PM_TO_SYS(JACK_DETECT_GPIO);
@@ -995,7 +1015,7 @@ static int msm8960_audrx_init(struct snd_soc_pcm_runtime *rtd)
 		err = pm8xxx_gpio_config(mbhc_cfg.gpio, &jack_gpio_cfg);
 		if (err) {
 			pr_err("%s: pm8xxx_gpio_config JACK_DETECT failed %d\n",
-			       __func__, err);
+				__func__, err);
 			return err;
 		}
 	}
@@ -1047,6 +1067,18 @@ static int msm8960_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 
 	pr_debug("%s()\n", __func__);
 	rate->min = rate->max = 48000;
+
+	return 0;
+}
+
+static int msm8960_be_hw_pri_i2s_params_fixup(struct snd_soc_pcm_runtime *rtd,
+			struct snd_pcm_hw_params *params)
+{
+	struct snd_interval *rate = hw_param_interval(params,
+	SNDRV_PCM_HW_PARAM_RATE);
+
+	pr_debug("%s()\n", __func__);
+	rate->min = rate->max = 16000;
 
 	return 0;
 }
@@ -1158,6 +1190,145 @@ fail_dout:
 	return ret;
 }
 
+static int msm_mi2s_rx_hw_params(struct snd_pcm_substream *substream,
+			struct snd_pcm_hw_params *params)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+
+	int ret;
+	int rate = params_rate(params);
+	int bit_clk_set;
+	bit_clk_set = 12288000/(rate * 2 * 16);
+	clk_set_rate(mi2s_rx_bit_clk, bit_clk_set);
+	/* if it is msm stub dummy codec dai, it doesnt support this op
+	 * causes an unneseccary failure to startup path. */
+	if (strncmp(codec_dai->name, "msm-stub-tx", 11)) {
+		ret = snd_soc_dai_set_sysclk(codec_dai, 0, TABLA_EXT_CLK_RATE,
+					SND_SOC_CLOCK_IN);
+		if (ret < 0) {
+			pr_err("can't set rx codec clk configuration\n");
+			return ret;
+		}
+	}
+	return 1;
+}
+
+static void msm_mi2s_rx_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_card *card = rtd->card;
+	struct msm8960_asoc_mach_data *data = snd_soc_card_get_drvdata(card);
+
+	if (!data) {
+		pr_err("%s: no machine data!\n", __func__);
+		return;
+	}
+
+	if (atomic_dec_return(&mi2s_rsc_ref) == 0) {
+		if (mi2s_rx_bit_clk) {
+			clk_disable_unprepare(mi2s_rx_bit_clk);
+			clk_put(mi2s_rx_bit_clk);
+			mi2s_rx_bit_clk = NULL;
+		}
+		if (mi2s_rx_osr_clk) {
+			clk_disable_unprepare(mi2s_rx_osr_clk);
+			clk_put(mi2s_rx_osr_clk);
+			mi2s_rx_osr_clk = NULL;
+		}
+		gpio_free_array(data->mi2s_gpios, data->num_mi2s_gpios);
+	}
+}
+
+static int msm_mi2s_rx_startup(struct snd_pcm_substream *substream)
+{
+	int ret = 0;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_card *card = rtd->card;
+	struct msm8960_asoc_mach_data *data = snd_soc_card_get_drvdata(card);
+
+	if (!data) {
+		pr_err("%s: no machine data!\n", __func__);
+		return -ENODEV;
+	}
+
+	if (atomic_inc_return(&mi2s_rsc_ref) == 1) {
+		ret = gpio_request_array(data->mi2s_gpios,
+						data->num_mi2s_gpios);
+		if (ret < 0)
+			goto mi2s_gpio_fail;
+
+		mi2s_rx_osr_clk = clk_get(cpu_dai->dev, "osr_clk");
+		if (IS_ERR(mi2s_rx_osr_clk)) {
+			pr_err("Failed to get mi2s_rx_osr_clk\n");
+			ret = PTR_ERR(mi2s_rx_osr_clk);
+			goto osr_clk_fail;
+		}
+		clk_set_rate(mi2s_rx_osr_clk, TABLA_EXT_CLK_RATE);
+		ret = clk_prepare_enable(mi2s_rx_osr_clk);
+		if (ret != 0) {
+			pr_err("Unable to enable mi2s_rx_osr_clk\n");
+			clk_put(mi2s_rx_osr_clk);
+			mi2s_rx_osr_clk = NULL;
+			goto osr_clk_fail;
+		}
+
+		mi2s_rx_bit_clk = clk_get(cpu_dai->dev, "bit_clk");
+		if (IS_ERR(mi2s_rx_bit_clk)) {
+			pr_err("Failed to get mi2s_osr_clk\n");
+			ret = PTR_ERR(mi2s_rx_bit_clk);
+			goto bit_clk_fail;
+		}
+		/* Actual bit clk rate is set up in hw_param
+		value 8 is arrived from assuming rate to be 48k here */
+		clk_set_rate(mi2s_rx_bit_clk, 8);
+		ret = clk_prepare_enable(mi2s_rx_bit_clk);
+		if (ret != 0) {
+			pr_err("Unable to enable mi2s_rx_bit_clk\n");
+			clk_put(mi2s_rx_bit_clk);
+			mi2s_rx_bit_clk = NULL;
+			goto bit_clk_fail;
+		}
+
+		ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
+		if (ret < 0) {
+			pr_err("set format for msm dai failed\n");
+			goto msm_dai_fail;
+		}
+
+		 /* if it is msm stub dummy codec dai, it doesnt support this op
+			causes an unnecessary failure to startup path. */
+		if (strncmp(codec_dai->name, "msm-stub-tx", 11)) {
+			ret = snd_soc_dai_set_fmt(codec_dai,
+				SND_SOC_DAIFMT_CBS_CFS|SND_SOC_DAIFMT_I2S);
+			if (ret < 0) {
+				pr_err("set format for codec dai failed\n");
+				goto codec_dai_fail;
+			}
+		}
+	}
+	pr_debug("%s: ret = %d\n", __func__, ret);
+	return ret;
+
+codec_dai_fail:
+msm_dai_fail:
+	clk_disable_unprepare(mi2s_rx_bit_clk);
+	clk_put(mi2s_rx_bit_clk);
+	mi2s_rx_bit_clk = NULL;
+bit_clk_fail:
+	clk_disable_unprepare(mi2s_rx_osr_clk);
+	clk_put(mi2s_rx_osr_clk);
+	mi2s_rx_osr_clk = NULL;
+osr_clk_fail:
+	gpio_free_array(data->mi2s_gpios, data->num_mi2s_gpios);
+mi2s_gpio_fail:
+	atomic_dec(&mi2s_rsc_ref);
+
+	return ret;
+}
+
 static int msm8960_aux_pcm_free_gpios(void)
 {
 	gpio_free(GPIO_AUX_PCM_DIN);
@@ -1167,6 +1338,119 @@ static int msm8960_aux_pcm_free_gpios(void)
 
 	return 0;
 }
+
+static int msm_primary_i2s_tx_hw_params(struct snd_pcm_substream *substream,
+			struct snd_pcm_hw_params *params)
+{
+	int rate = params_rate(params);
+	int bit_clk_set = 0;
+	pr_debug("%s rate: %d\n", __func__, rate);
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		bit_clk_set = TABLA_EXT_CLK_RATE/(rate * 2 * 16);
+		clk_set_rate(pri_i2s_tx_bit_clk, bit_clk_set);
+		return 1;
+	}
+	return -EINVAL;
+}
+
+static void msm_primary_i2s_tx_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_card *card = rtd->card;
+	struct msm8960_asoc_mach_data *data = snd_soc_card_get_drvdata(card);
+
+	if (!data) {
+		pr_err("%s: no machine data!\n", __func__);
+		return;
+	}
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+
+		if (pri_i2s_tx_osr_clk) {
+			clk_disable_unprepare(pri_i2s_tx_osr_clk);
+			clk_put(pri_i2s_tx_osr_clk);
+			pri_i2s_tx_osr_clk = NULL;
+		}
+		if (pri_i2s_tx_bit_clk) {
+			clk_disable_unprepare(pri_i2s_tx_bit_clk);
+			clk_put(pri_i2s_tx_bit_clk);
+			pri_i2s_tx_bit_clk = NULL;
+		}
+		gpio_free_array(data->pri_i2s_gpios, data->num_pri_i2s_gpios);
+	}
+}
+
+static int msm_primary_i2s_tx_startup(struct snd_pcm_substream *substream)
+{
+	int ret = -EINVAL;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_card *card = rtd->card;
+	struct msm8960_asoc_mach_data *data = snd_soc_card_get_drvdata(card);
+
+	if (!data) {
+		pr_err("%s: no machine data!\n", __func__);
+		return -ENODEV;
+	}
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
+		ret = gpio_request_array(data->pri_i2s_gpios,
+						data->num_pri_i2s_gpios);
+		if (ret < 0)
+			return ret;
+
+		pri_i2s_tx_osr_clk = clk_get(cpu_dai->dev, "osr_clk");
+		if (IS_ERR(pri_i2s_tx_osr_clk)) {
+			pr_err("Failed to get pri_i2s_tx_osr_clk\n");
+			ret = PTR_ERR(pri_i2s_tx_osr_clk);
+			goto osr_clk_fail;
+		}
+		clk_set_rate(pri_i2s_tx_osr_clk, TABLA_EXT_CLK_RATE);
+		ret = clk_prepare_enable(pri_i2s_tx_osr_clk);
+		if (ret != 0) {
+			pr_err("Unable to enable pri_i2s_tx_osr_clk\n");
+			goto osr_clk_en_fail;
+		}
+		pri_i2s_tx_bit_clk = clk_get(cpu_dai->dev, "bit_clk");
+		if (IS_ERR(pri_i2s_tx_bit_clk)) {
+			pr_err("Failed to get pri_i2s_tx_bit_clk\n");
+			ret = PTR_ERR(pri_i2s_tx_bit_clk);
+			goto bit_clk_fail;
+		}
+		/* Actual bit clk rate is set up in hw_param
+		value 24 is arrived from assuming rate to be 16k here */
+		clk_set_rate(pri_i2s_tx_bit_clk, 24);
+		ret = clk_prepare_enable(pri_i2s_tx_bit_clk);
+		if (ret != 0) {
+			pr_err("Unable to enable pri_i2s_tx_bit_clk\n");
+			goto bit_clk_en_fail;
+		}
+		ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBS_CFS);
+
+		if (ret < 0) {
+			pr_err("set format for cpu dai failed\n");
+			goto set_fmt_fail;
+		}
+	}
+	pr_debug("%s: ret = %d\n", __func__, ret);
+	return ret;
+
+set_fmt_fail:
+	clk_disable_unprepare(pri_i2s_tx_bit_clk);
+bit_clk_en_fail:
+	clk_put(pri_i2s_tx_bit_clk);
+	pri_i2s_tx_bit_clk = NULL;
+bit_clk_fail:
+	clk_disable_unprepare(pri_i2s_tx_osr_clk);
+osr_clk_en_fail:
+	clk_put(pri_i2s_tx_osr_clk);
+	pri_i2s_tx_osr_clk = NULL;
+osr_clk_fail:
+	gpio_free_array(data->pri_i2s_gpios, data->num_pri_i2s_gpios);
+
+	return ret;
+}
+
 static int msm8960_startup(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
@@ -1226,6 +1510,19 @@ static struct snd_soc_ops msm8960_slimbus_2_be_ops = {
 	.hw_params = msm8960_slimbus_2_hw_params,
 	.shutdown = msm8960_shutdown,
 };
+
+static struct snd_soc_ops msm_mi2s_rx_be_ops = {
+	.startup = msm_mi2s_rx_startup,
+	.shutdown = msm_mi2s_rx_shutdown,
+	.hw_params = msm_mi2s_rx_hw_params,
+};
+
+static struct snd_soc_ops msm_primary_i2s_tx_be_ops = {
+	.startup = msm_primary_i2s_tx_startup,
+	.shutdown = msm_primary_i2s_tx_shutdown,
+	.hw_params = msm_primary_i2s_tx_hw_params,
+};
+
 
 /* Digital audio interface glue - connects codec <---> CPU */
 static struct snd_soc_dai_link msm8960_dai_common[] = {
@@ -1684,6 +1981,79 @@ static struct snd_soc_dai_link msm8960_dai_delta_tabla2x[] = {
 	},
 };
 
+/* Add new MMI DAI links to this structure */
+static struct snd_soc_dai_link mmi_dai_links[] = {
+#ifdef CONFIG_SND_SOC_TLV320AIC3253
+	/* MI2S I2S RX BACK END DAI Link */
+	{
+		.name = LPASS_BE_MI2S_RX,
+		.stream_name = "MI2S Playback",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name     = "tlv320aic3253.10-0018",
+		.codec_dai_name = "tlv320aic3253_codec",
+		.no_pcm = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_RX,
+		.be_hw_params_fixup = msm8960_be_hw_params_fixup,
+		.ops = &msm_mi2s_rx_be_ops,
+	},
+#endif
+	/* Primary I2S TX BACK END DAI Link */
+	{
+		.name = LPASS_BE_PRI_I2S_TX,
+		.stream_name = "Primary I2S Capture",
+		.cpu_dai_name = "msm-dai-q6.1",
+		.platform_name = "msm-pcm-routing",
+		.codec_name = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-tx",
+		.no_pcm = 1,
+		.be_id = MSM_BACKEND_DAI_PRI_I2S_TX,
+		.be_hw_params_fixup = msm8960_be_hw_pri_i2s_params_fixup,
+		.ops = &msm_primary_i2s_tx_be_ops,
+	},
+#ifdef CONFIG_SND_SOC_TFA9890
+	/* MI2S I2S RX BACK END DAI Link */
+	{
+		.name = LPASS_BE_MI2S_RX,
+		.stream_name = "MI2S Playback",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name     = "tfa9890.10-0034",
+		.codec_dai_name = "tfa9890_codec",
+		.no_pcm = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_RX,
+		.be_hw_params_fixup = msm8960_be_hw_params_fixup,
+		.ops = &msm_mi2s_rx_be_ops,
+	},
+#endif
+	/* MI2S I2S TX BACK END DAI Link */
+	{
+		.name = LPASS_BE_MI2S_TX,
+		.stream_name = "MI2S Capture",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-tx",
+		.no_pcm = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_TX,
+		.be_hw_params_fixup = msm8960_be_hw_params_fixup,
+		.ops = &msm_mi2s_rx_be_ops,
+	},
+	/* MI2S I2S RX BACK END DAI Link */
+	{
+		.name = LPASS_BE_MI2S_RX,
+		.stream_name = "MI2S Playback",
+		.cpu_dai_name = "msm-dai-q6-mi2s",
+		.platform_name = "msm-pcm-routing",
+		.codec_name = "msm-stub-codec.1",
+		.codec_dai_name = "msm-stub-rx",
+		.no_pcm = 1,
+		.be_id = MSM_BACKEND_DAI_MI2S_RX,
+		.be_hw_params_fixup = msm8960_be_hw_params_fixup,
+		.ops = &msm_mi2s_rx_be_ops,
+	},
+};
+
 static struct snd_soc_dai_link msm8960_tabla1x_dai[
 					 ARRAY_SIZE(msm8960_dai_common) +
 					 ARRAY_SIZE(msm8960_dai_delta_tabla1x)];
@@ -1691,10 +2061,12 @@ static struct snd_soc_dai_link msm8960_tabla1x_dai[
 
 static struct snd_soc_dai_link msm8960_dai[
 					 ARRAY_SIZE(msm8960_dai_common) +
-					 ARRAY_SIZE(msm8960_dai_delta_tabla2x)];
+					ARRAY_SIZE(msm8960_dai_delta_tabla2x) +
+					ARRAY_SIZE(mmi_dai_links)];
 
 static struct snd_soc_card snd_soc_tabla1x_card_msm8960 = {
 		.name		= "msm8960-tabla1x-snd-card",
+		.long_name	= "msm8960-snd-card-wcd",
 		.dai_link	= msm8960_tabla1x_dai,
 		.num_links	= ARRAY_SIZE(msm8960_tabla1x_dai),
 		.controls = tabla_msm8960_controls,
@@ -1703,6 +2075,7 @@ static struct snd_soc_card snd_soc_tabla1x_card_msm8960 = {
 
 static struct snd_soc_card snd_soc_card_msm8960 = {
 		.name		= "msm8960-snd-card",
+		.long_name	= "msm8960-snd-card-wcd",
 		.dai_link	= msm8960_dai,
 		.num_links	= ARRAY_SIZE(msm8960_dai),
 		.controls = tabla_msm8960_controls,
@@ -1714,6 +2087,12 @@ static struct platform_device *msm8960_snd_tabla1x_device;
 
 static int msm8960_configure_headset_mic_gpios(void)
 {
+#ifdef CONFIG_MACH_MSM8960_MMI
+	/* FIXME: Headset GPIOs must be passed to as parameters to ensure */
+	/* no conflicts!!! MMI HW design re-uses these GPIOS in EMU       */
+	pr_err("%s: US_EURO, AV_SWITCH gpios not configured!!!\n", __func__);
+	return -EINVAL;
+#else
 	int ret;
 	struct pm_gpio param = {
 		.direction      = PM_GPIO_DIR_OUT,
@@ -1754,6 +2133,7 @@ static int msm8960_configure_headset_mic_gpios(void)
 		gpio_direction_output(us_euro_sel_gpio, 0);
 
 	return 0;
+#endif
 }
 static void msm8960_free_headset_mic_gpios(void)
 {
@@ -1763,9 +2143,171 @@ static void msm8960_free_headset_mic_gpios(void)
 	}
 }
 
+#ifdef CONFIG_OF
+static void msm8960_of_add_dai_links(struct snd_soc_card *card,
+						struct device_node *np)
+{
+	struct snd_soc_dai_link *tbl = card->dai_link;
+	struct device_node *dai;
+	int i;
+	int ret;
+	const char *ln;
+
+	if (!np)
+		return;
+
+	/* Get the specified longname */
+	ret = of_property_read_string(np, "qcom,msm8960-card-longname", &ln);
+	if (!ret) {
+		snd_soc_tabla1x_card_msm8960.long_name = ln;
+		snd_soc_card_msm8960.long_name = ln;
+	}
+
+	/* Move pointer to end of table */
+	tbl += card->num_links;
+
+	for_each_child_of_node(np, dai) {
+		const char *name;
+
+		if (!of_device_is_available(dai))
+			continue;
+
+		if (!of_device_is_compatible(dai, "qcom,msm8960-dai-link"))
+			continue;
+
+		ret = of_property_read_string(dai, "qcom,msm8960-codec-name",
+						&name);
+
+		if (ret) {
+			pr_err("%s: missing codec-name property\n", __func__);
+			continue;
+		}
+
+		for (i = 0; i < ARRAY_SIZE(mmi_dai_links); i++) {
+			struct snd_soc_dai_link *cur = &mmi_dai_links[i];
+
+			/* If no match, skip it */
+			if (of_prop_cmp(cur->codec_dai_name, name))
+				continue;
+
+			pr_debug("%s: Adding MMI DAI link: %s\n",
+					__func__, name);
+
+			memcpy(tbl, cur, sizeof(struct snd_soc_dai_link));
+			tbl++;
+			card->num_links++;
+		}
+	}
+}
+
+static void msm8960_free_mach_data(struct snd_soc_card *card)
+{
+	struct msm8960_asoc_mach_data *data = snd_soc_card_get_drvdata(card);
+
+	if (data) {
+		kfree(data->pri_i2s_gpios);
+		kfree(data->mi2s_gpios);
+	}
+	kfree(data);
+}
+
+static void msm8960_of_parse_dt(struct snd_soc_card *card,
+						struct device_node *np)
+{
+	struct msm8960_asoc_mach_data *data;
+	struct gpio *p = NULL;
+	unsigned int cnt;
+	int ret;
+	int i;
+
+	if (!np)
+		return;
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data) {
+		pr_err("%s: couldn't allocate mach data\n", __func__);
+		return;
+	}
+
+	cnt = of_gpio_named_count(np, "gpios-pri-i2s");
+	ret = of_property_count_strings(np, "gpios-pri-i2s-names");
+	if (cnt && cnt != ret) {
+		pr_err("%s: PRI I2S GPIO and label mismatch\n", __func__);
+		goto free_data;
+	}
+
+	if (cnt) {
+		p = kzalloc(sizeof(struct gpio) * cnt, GFP_KERNEL);
+		if (!p) {
+			pr_err("%s: pri_i2s_gpio alloc failed\n", __func__);
+			goto free_data;
+		}
+		data->pri_i2s_gpios = p;
+		data->num_pri_i2s_gpios = cnt;
+	}
+
+	for (i = 0; p && i < cnt; i++) {
+		p[i].gpio = of_get_named_gpio(np, "gpios-pri-i2s", i);
+		of_property_read_string_index(np, "gpios-pri-i2s-names", i,
+								&p[i].label);
+		pr_debug("%s: index: %d GPIO: %d name: %s\n", __func__, i,
+			p[i].gpio, p[i].label);
+	}
+
+	cnt = of_gpio_named_count(np, "gpios-mi2s");
+	ret = of_property_count_strings(np, "gpios-mi2s-names");
+	if (cnt && cnt != ret) {
+		pr_err("%s: MI2S GPIO and label mismatch\n", __func__);
+		goto free_pri_i2s;
+	}
+
+	if (cnt) {
+		p = kzalloc(sizeof(struct gpio) * cnt, GFP_KERNEL);
+		if (!p) {
+			pr_err("%s: mi2s_gpio alloc failed\n", __func__);
+			goto free_pri_i2s;
+		}
+		data->mi2s_gpios = p;
+		data->num_mi2s_gpios = cnt;
+	}
+
+	for (i = 0; p && i < cnt; i++) {
+		p[i].gpio = of_get_named_gpio(np, "gpios-mi2s", i);
+		of_property_read_string_index(np, "gpios-mi2s-names", i,
+								&p[i].label);
+		pr_debug("%s: index: %d GPIO: %d name: %s\n", __func__, i,
+			p[i].gpio, p[i].label);
+	}
+
+	snd_soc_card_set_drvdata(card, data);
+
+	return;
+
+free_pri_i2s:
+	kfree(data->pri_i2s_gpios);
+free_data:
+	kfree(data);
+	return;
+}
+
+#else
+static inline void msm8960_of_add_dai_links(struct snd_soc_card *card,
+						struct device_node *np)
+{
+}
+
+static inline void msm8960_free_mach_data(struct snd_soc_card *card) { }
+
+static inline void msm8960_of_parse_dt(struct snd_soc_card *card,
+						struct device_node *np)
+{
+}
+#endif
+
 static int __init msm8960_audio_init(void)
 {
 	int ret;
+	struct device_node *np;
 
 	if (!soc_class_is_msm8960()) {
 		pr_debug("%s: Not the right machine type\n", __func__);
@@ -1785,9 +2327,22 @@ static int __init msm8960_audio_init(void)
 		return -ENOMEM;
 	}
 
+	np = of_find_compatible_node(NULL, NULL, "qcom,msm8960-soc-audio");
+
+	snd_soc_card_msm8960.num_links = 0;
+
 	memcpy(msm8960_dai, msm8960_dai_common, sizeof(msm8960_dai_common));
+	snd_soc_card_msm8960.num_links += ARRAY_SIZE(msm8960_dai_common);
+
 	memcpy(msm8960_dai + ARRAY_SIZE(msm8960_dai_common),
 		msm8960_dai_delta_tabla2x, sizeof(msm8960_dai_delta_tabla2x));
+	snd_soc_card_msm8960.num_links += ARRAY_SIZE(msm8960_dai_delta_tabla2x);
+
+	/* Add DT supported DAI Links */
+	msm8960_of_add_dai_links(&snd_soc_card_msm8960, np);
+
+	/* Parse DT */
+	msm8960_of_parse_dt(&snd_soc_card_msm8960, np);
 
 	platform_set_drvdata(msm8960_snd_device, &snd_soc_card_msm8960);
 	ret = platform_device_add(msm8960_snd_device);
@@ -1801,6 +2356,7 @@ static int __init msm8960_audio_init(void)
 	if (!msm8960_snd_tabla1x_device) {
 		pr_err("Platform device allocation failed\n");
 		kfree(mbhc_cfg.calibration);
+		msm8960_free_mach_data(&snd_soc_card_msm8960);
 		return -ENOMEM;
 	}
 
@@ -1815,6 +2371,7 @@ static int __init msm8960_audio_init(void)
 	if (ret) {
 		platform_device_put(msm8960_snd_tabla1x_device);
 		kfree(mbhc_cfg.calibration);
+		msm8960_free_mach_data(&snd_soc_card_msm8960);
 		return ret;
 	}
 
@@ -1833,6 +2390,8 @@ static int __init msm8960_audio_init(void)
 
 	mutex_init(&cdc_mclk_mutex);
 	atomic_set(&auxpcm_rsc_ref, 0);
+	atomic_set(&mi2s_rsc_ref, 0);
+
 	return ret;
 
 }
@@ -1844,6 +2403,7 @@ static void __exit msm8960_audio_exit(void)
 		pr_debug("%s: Not the right machine type\n", __func__);
 		return ;
 	}
+	msm8960_free_mach_data(&snd_soc_card_msm8960);
 	msm8960_free_headset_mic_gpios();
 	platform_device_unregister(msm8960_snd_device);
 	platform_device_unregister(msm8960_snd_tabla1x_device);

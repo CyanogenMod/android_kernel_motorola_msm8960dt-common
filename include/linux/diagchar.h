@@ -28,6 +28,8 @@
 #define SOCKET_MODE			5
 #define CALLBACK_MODE			6
 #define MEMORY_DEVICE_MODE_NRT		7
+#define TTY_MODE			8
+
 /* different values that go in for diag_data_type */
 #define DATA_TYPE_EVENT         	0
 #define DATA_TYPE_F3            	1
@@ -39,6 +41,12 @@
 #define DIAG_IOCTL_SWITCH_LOGGING	7
 #define DIAG_IOCTL_GET_DELAYED_RSP_ID 	8
 #define DIAG_IOCTL_LSM_DEINIT		9
+
+/* 15 ~ 17 are allocated for slate feature */
+#define DIAG_IOCTL_RESERVED_FOR_ADDON_0 15
+#define DIAG_IOCTL_RESERVED_FOR_ADDON_1 16
+#define DIAG_IOCTL_RESERVED_FOR_ADDON_2 17
+
 #define DIAG_IOCTL_DCI_INIT		20
 #define DIAG_IOCTL_DCI_DEINIT		21
 #define DIAG_IOCTL_DCI_SUPPORT		22
@@ -50,6 +58,9 @@
 #define DIAG_IOCTL_DCI_CLEAR_LOGS	28
 #define DIAG_IOCTL_DCI_CLEAR_EVENTS	29
 #define DIAG_IOCTL_REMOTE_DEV		32
+
+#define DIAG_IOCTL_OPTIMIZED_LOGGING	33
+#define DIAG_IOCTL_OPTIMIZED_LOGGING_FLUSH	34
 
 /* PC Tools IDs */
 #define APQ8060_TOOLS_ID	4062

@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/pm8xxx-adc.h>
+#include <linux/mfd/pm8xxx/pm8921-charger.h>
 #include <linux/mfd/pm8xxx/ccadc.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -322,6 +323,10 @@ static int calib_ccadc_program_trim(struct pm8xxx_ccadc_chip *chip,
 
 static int get_batt_temp(struct pm8xxx_ccadc_chip *chip, int *batt_temp)
 {
+#if defined(CONFIG_PM8921_CHARGER) && defined(CONFIG_PM8921_EXTENDED_INFO)
+	*batt_temp = pm8921_batt_temperature();
+	return 0;
+#else
 	int rc;
 	struct pm8xxx_adc_chan_result result;
 
@@ -335,6 +340,7 @@ static int get_batt_temp(struct pm8xxx_ccadc_chip *chip, int *batt_temp)
 	pr_debug("batt_temp phy = %lld meas = 0x%llx\n", result.physical,
 						result.measurement);
 	return 0;
+#endif
 }
 
 static int get_current_time(unsigned long *now_tm_sec)
@@ -790,6 +796,15 @@ static int __devexit pm8xxx_ccadc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int pm8xxx_ccadc_suspend(struct device *dev)
+{
+	struct pm8xxx_ccadc_chip *chip = dev_get_drvdata(dev);
+
+	cancel_delayed_work_sync(&chip->calib_ccadc_work);
+
+	return 0;
+}
+
 #define CCADC_CALIB_TEMP_THRESH 20
 static int pm8xxx_ccadc_resume(struct device *dev)
 {
@@ -823,8 +838,11 @@ static int pm8xxx_ccadc_resume(struct device *dev)
 				|| delta_temp > CCADC_CALIB_TEMP_THRESH) {
 			the_chip->last_calib_time = current_time_sec;
 			the_chip->last_calib_temp = batt_temp;
-			cancel_delayed_work(&the_chip->calib_ccadc_work);
 			schedule_delayed_work(&the_chip->calib_ccadc_work, 0);
+		} else {
+			schedule_delayed_work(&the_chip->calib_ccadc_work,
+				msecs_to_jiffies(the_chip->calib_delay_ms -
+					(time_since_last_calib * 1000)));
 		}
 	}
 
@@ -832,6 +850,7 @@ static int pm8xxx_ccadc_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops pm8xxx_ccadc_pm_ops = {
+	.suspend	= pm8xxx_ccadc_suspend,
 	.resume		= pm8xxx_ccadc_resume,
 };
 

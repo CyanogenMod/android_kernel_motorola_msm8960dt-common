@@ -10,6 +10,7 @@
  * GNU General Public License for more details.
  *
  */
+#include <linux/dropbox.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
@@ -74,7 +75,9 @@
 	 | (MMU_CONFIG << MH_MMU_CONFIG__PA_W_CLNT_BEHAVIOR__SHIFT))
 
 static const struct kgsl_functable adreno_functable;
-
+#ifndef CONFIG_DEBUG_FS
+unsigned int kgsl_cff_dump_enable;
+#endif
 static struct adreno_device device_3d0 = {
 	.dev = {
 		KGSL_DEVICE_COMMON_INIT(device_3d0.dev),
@@ -145,6 +148,10 @@ unsigned int ft_detect_regs[] = {
 };
 
 const unsigned int ft_detect_regs_count = ARRAY_SIZE(ft_detect_regs);
+
+static void adreno_hang_panic_work_func(struct work_struct *work);
+static struct delayed_work adreno_hang_panic_work;
+static struct kgsl_device *adreno_hang_panic_device = NULL;
 
 /*
  * This is the master list of all GPU cores that are supported by this
@@ -1142,6 +1149,24 @@ adreno_ocmem_gmem_free(struct adreno_device *adreno_dev)
 }
 #endif
 
+void adreno_hang_dropbox_trigger_callback(void *data)
+{
+	struct kgsl_device *device = (struct kgsl_device *)data;
+
+	mutex_lock(&device->mutex);
+
+	kgsl_postmortem_dump(device, 1);
+	kgsl_device_snapshot(device, 0);
+
+	/* add dropbox events */
+	dropbox_queue_event_binary("graphics_hang_snapshot", device->snapshot,
+		device->snapshot_size);
+	dropbox_queue_event_text("graphics_hang_postmortem",
+		device->postmortem_dump, device->postmortem_size);
+
+	mutex_unlock(&device->mutex);
+}
+
 static int __devinit
 adreno_probe(struct platform_device *pdev)
 {
@@ -1170,10 +1195,17 @@ adreno_probe(struct platform_device *pdev)
 	if (status)
 		goto error_close_rb;
 
+	adreno_postmortem_sysfs_init(device);
+#ifdef CONFIG_DEBUG_FS
 	adreno_debugfs_init(device);
-
+#endif
 	kgsl_pwrscale_init(device);
 	kgsl_pwrscale_attach_policy(device, ADRENO_DEFAULT_PWRSCALE_POLICY);
+
+	INIT_DELAYED_WORK(&adreno_hang_panic_work, adreno_hang_panic_work_func);
+
+	dropbox_register_trigger_callback("graphics_hang",
+		&adreno_hang_dropbox_trigger_callback, device);
 
 	device->flags &= ~KGSL_FLAGS_SOFT_RESET;
 	return 0;
@@ -1193,6 +1225,8 @@ static int __devexit adreno_remove(struct platform_device *pdev)
 
 	device = (struct kgsl_device *)pdev->id_entry->driver_data;
 	adreno_dev = ADRENO_DEVICE(device);
+
+	adreno_postmortem_sysfs_close(device);
 
 	kgsl_pwrscale_detach_policy(device);
 	kgsl_pwrscale_close(device);
@@ -2106,6 +2140,13 @@ adreno_dump_and_exec_ft(struct kgsl_device *device)
 			* will work as it always has
 			*/
 			kgsl_device_snapshot(device, 1);
+
+			/* add dropbox events */
+			dropbox_queue_event_binary("graphics_hang_snapshot",
+				device->snapshot, device->snapshot_size);
+			dropbox_queue_event_text("graphics_hang_postmortem",
+				device->postmortem_dump,
+				device->postmortem_size);
 		}
 
 		result = adreno_ft(device, &ft_data);
@@ -2116,6 +2157,8 @@ adreno_dump_and_exec_ft(struct kgsl_device *device)
 
 		if (result) {
 			kgsl_pwrctrl_set_state(device, KGSL_STATE_HUNG);
+			adreno_hang_panic_device = device;
+			schedule_delayed_work(&adreno_hang_panic_work, msecs_to_jiffies(10000));
 		} else {
 			kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 			mod_timer(&device->idle_timer, jiffies + FIRST_TIMEOUT);
@@ -2126,6 +2169,13 @@ done:
 	return result;
 }
 EXPORT_SYMBOL(adreno_dump_and_exec_ft);
+
+static void adreno_hang_panic_work_func(struct work_struct *work)
+{
+	KGSL_DRV_ERR(adreno_hang_panic_device,
+	             "Cannot recover GPU. Device will be restarted");
+	BUG();
+}
 
 static int adreno_getproperty(struct kgsl_device *device,
 				enum kgsl_property_type type,
@@ -3059,7 +3109,7 @@ static int adreno_waittimestamp(struct kgsl_device *device,
 		 */
 
 		if (KGSL_TIMEOUT_PART < (msecs - time_elapsed))
-			wait = KGSL_TIMEOUT_PART;
+		wait = KGSL_TIMEOUT_PART;
 		else
 			wait = (msecs - time_elapsed);
 

@@ -14,6 +14,7 @@
 #define __PM8XXX_BMS_BATTERYDATA_H
 
 #include <linux/errno.h>
+#include <linux/types.h>
 
 #define FCC_CC_COLS		5
 #define FCC_TEMP_COLS		8
@@ -25,6 +26,8 @@
 #define PC_TEMP_COLS		8
 
 #define MAX_SINGLE_LUT_COLS	20
+
+#define START_METER_OFFSET_SOC 4
 
 struct single_row_lut {
 	int x[MAX_SINGLE_LUT_COLS];
@@ -73,6 +76,7 @@ enum battery_type {
 	BATT_UNKNOWN = 0,
 	BATT_PALLADIUM,
 	BATT_DESAY,
+	BATT_MMI,
 };
 
 /**

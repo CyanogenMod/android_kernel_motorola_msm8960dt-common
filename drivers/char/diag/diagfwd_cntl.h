@@ -30,6 +30,15 @@
 /* Send Diag F3 mask */
 #define DIAG_CTRL_MSG_F3_MASK_V2	11
 
+/* custom diag mode command to send optimized logging parameters to BP */
+#define DIAG_CTRL_MSG_DIAGMODE_MDLOG 100
+
+/* custom diag mode command to flush BP buffer */
+#define DIAG_CTRL_MSG_DIAG_FLUSH     101
+
+/* user selection, indicating whether to use optimized logging */
+extern unsigned int optimized_logging;
+
 struct cmd_code_range {
 	uint16_t cmd_code_lo;
 	uint16_t cmd_code_hi;
@@ -77,6 +86,25 @@ struct diag_ctrl_msg_mask {
 	/* Copy msg mask here */
 } __packed;
 
+
+struct diag_ctrl_msg_diagmode_mdlog {
+	uint32_t ctrl_pkt_id;
+	uint32_t ctrl_pkt_data_len;
+	uint32_t version;
+	uint32_t optimized;
+	uint32_t commit_threshold;
+	uint32_t drain_timer_val;
+	uint32_t event_stale_timer_val;
+	uint32_t drain_low_threshold;
+	uint32_t drain_high_threshold;
+	uint32_t drain_interval_in_secs;
+} __packed;
+
+struct diag_ctrl_msg_diag_flush {
+	uint32_t ctrl_pkt_id;
+	uint32_t ctrl_pkt_data_len;
+} __packed;
+
 struct diag_ctrl_feature_mask {
 	uint32_t ctrl_pkt_id;
 	uint32_t ctrl_pkt_data_len;
@@ -106,6 +134,7 @@ int diag_process_smd_cntl_read_data(struct diag_smd_info *smd_info, void *buf,
 								int total_recd);
 void diag_send_diag_mode_update(int real_time);
 void diag_send_diag_mode_update_by_smd(struct diag_smd_info *smd_info,
-							int real_time);
+					int real_time);
 
+void diag_send_diag_flush(struct diag_smd_info *smd_info);
 #endif

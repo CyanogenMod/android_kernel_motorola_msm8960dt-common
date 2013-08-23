@@ -24,6 +24,9 @@
 #ifdef CONFIG_DIAG_OVER_USB
 #include <mach/usbdiag.h>
 #endif
+#ifdef CONFIG_DIAG_OVER_TTY
+#include <mach/tty_diag.h>
+#endif
 #include <asm/current.h>
 #include "diagchar_hdlc.h"
 #include "diagmem.h"
@@ -49,6 +52,13 @@ MODULE_VERSION("1.0");
 
 #define INIT	1
 #define EXIT	-1
+
+#define NO_LOGGING_MODE_NAME		"none"
+#define MEMORY_DEVICE_MODE_NAME		"memory"
+#define USB_MODE_NAME			"usb"
+#define UART_MODE_NAME			"uart"
+#define TTY_MODE_NAME			"internal" /* "tty" */
+
 struct diagchar_dev *driver;
 struct diagchar_priv {
 	int pid;
@@ -69,6 +79,9 @@ static unsigned int threshold_client_limit = 30;
 /* This is the maximum number of pkt registrations supported at initialization*/
 int diag_max_reg = 600;
 int diag_threshold_reg = 750;
+
+/* user selection, indicating whether to use optimized logging */
+unsigned int optimized_logging;
 
 /* Timer variables */
 static struct timer_list drain_timer;
@@ -151,8 +164,8 @@ void diag_clear_hsic_tbl(void)
 			diag_hsic[j].num_hsic_buf_tbl_entries = 0;
 			for (i = 0; i < diag_hsic[j].poolsize_hsic_write; i++) {
 				if (diag_hsic[j].hsic_buf_tbl[i].buf) {
-					/* Return the buffer to the pool */
-					diagmem_free(driver, (unsigned char *)
+			/* Return the buffer to the pool */
+			diagmem_free(driver, (unsigned char *)
 						(diag_hsic[j].hsic_buf_tbl[i].
 						 buf), j+POOL_TYPE_HSIC);
 					diag_hsic[j].hsic_buf_tbl[i].buf = 0;
@@ -279,6 +292,7 @@ static int diagchar_close(struct inode *inode, struct file *file)
 	/* If the SD logging process exits, change logging to USB mode */
 	if (driver->logging_process_id == current->tgid) {
 		driver->logging_mode = USB_MODE;
+		/* set to non-optimized mode */
 		diag_send_diag_mode_update(MODE_REALTIME);
 		diagfwd_connect();
 #ifdef CONFIG_DIAGFWD_BRIDGE_CODE
@@ -301,7 +315,7 @@ static int diagchar_close(struct inode *inode, struct file *file)
 	diagmem_exit(driver, POOL_TYPE_WRITE_STRUCT);
 	for (i = 0; i < driver->num_clients; i++) {
 		if (NULL != diagpriv_data && diagpriv_data->pid ==
-						driver->client_map[i].pid) {
+			 driver->client_map[i].pid) {
 			driver->client_map[i].pid = 0;
 			kfree(diagpriv_data);
 			diagpriv_data = NULL;
@@ -715,21 +729,22 @@ void diag_cmp_logging_modes_diagfwd_bridge(int old_mode, int new_mode)
 				diag_hsic[i].hsic_data_requested =
 					driver->real_time_mode ? 1 : 0;
 		diagfwd_connect_bridge(0);
-	} else if (old_mode == USB_MODE && new_mode
-					 == NO_LOGGING_MODE) {
+	} else if ((old_mode == USB_MODE || old_mode == TTY_MODE) &&
+			new_mode == NO_LOGGING_MODE) {
 		diagfwd_disconnect_bridge(0);
-	} else if (old_mode == NO_LOGGING_MODE && new_mode
-					== USB_MODE) {
+	} else if (old_mode == NO_LOGGING_MODE &&
+			(new_mode == USB_MODE || new_mode == TTY_MODE)) {
+		diagfwd_connect();
 		diagfwd_connect_bridge(0);
-	} else if (old_mode == USB_MODE && new_mode
-					== MEMORY_DEVICE_MODE) {
+	} else if ((old_mode == USB_MODE || old_mode == TTY_MODE) &&
+			new_mode == MEMORY_DEVICE_MODE) {
 		if (driver->real_time_mode)
 			diagfwd_cancel_hsic(REOPEN_HSIC);
 		else
 			diagfwd_cancel_hsic(DONT_REOPEN_HSIC);
 		diagfwd_connect_bridge(0);
-	} else if (old_mode == MEMORY_DEVICE_MODE && new_mode
-					== USB_MODE) {
+	} else if (old_mode == MEMORY_DEVICE_MODE &&
+			(new_mode == USB_MODE || new_mode == TTY_MODE)) {
 		diag_clear_hsic_tbl();
 		diagfwd_cancel_hsic(REOPEN_HSIC);
 		diagfwd_connect_bridge(0);
@@ -785,13 +800,6 @@ int diag_switch_logging(unsigned long ioarg)
 	mutex_lock(&driver->diagchar_mutex);
 	temp = driver->logging_mode;
 	driver->logging_mode = (int)ioarg;
-
-	if (driver->logging_mode == MEMORY_DEVICE_MODE_NRT) {
-		diag_send_diag_mode_update(MODE_NONREALTIME);
-		driver->logging_mode = MEMORY_DEVICE_MODE;
-	} else {
-		diag_send_diag_mode_update(MODE_REALTIME);
-	}
 
 	if (temp == driver->logging_mode) {
 		mutex_unlock(&driver->diagchar_mutex);
@@ -860,18 +868,19 @@ int diag_switch_logging(unsigned long ioarg)
 						driver->logging_mode);
 		diag_cmp_logging_modes_diagfwd_bridge(temp,
 						driver->logging_mode);
-	} else if (temp == USB_MODE && driver->logging_mode
-						 == NO_LOGGING_MODE) {
+	} else if ((temp == USB_MODE || temp == TTY_MODE) &&
+				driver->logging_mode == NO_LOGGING_MODE) {
 		diagfwd_disconnect();
 		diag_cmp_logging_modes_diagfwd_bridge(temp,
 						driver->logging_mode);
-	} else if (temp == NO_LOGGING_MODE && driver->logging_mode
-							== USB_MODE) {
+	} else if (temp == NO_LOGGING_MODE && 
+				(driver->logging_mode == USB_MODE || 
+				 driver->logging_mode == TTY_MODE)) {
 		diagfwd_connect();
 		diag_cmp_logging_modes_diagfwd_bridge(temp,
 						driver->logging_mode);
-	} else if (temp == USB_MODE && driver->logging_mode
-						== MEMORY_DEVICE_MODE) {
+	} else if ((temp == USB_MODE || temp == TTY_MODE) &&
+				driver->logging_mode == MEMORY_DEVICE_MODE) {
 		diagfwd_disconnect();
 		for (i = 0; i < NUM_SMD_DATA_CHANNELS; i++) {
 			driver->smd_data[i].in_busy_1 = 0;
@@ -886,10 +895,19 @@ int diag_switch_logging(unsigned long ioarg)
 		diag_cmp_logging_modes_diagfwd_bridge(temp,
 						driver->logging_mode);
 	} else if (temp == MEMORY_DEVICE_MODE &&
-			 driver->logging_mode == USB_MODE) {
+			 (driver->logging_mode == USB_MODE ||
+			  driver->logging_mode == TTY_MODE)) {
 		diagfwd_connect();
 		diag_cmp_logging_modes_diagfwd_bridge(temp,
 						driver->logging_mode);
+	} else if (temp == USB_MODE && driver->logging_mode == TTY_MODE) {
+		usb_diag_close(driver->legacy_ch);
+		driver->legacy_ch = tty_diag_channel_open(DIAG_LEGACY,
+					driver, diag_usb_legacy_notifier);
+	} else if (temp == TTY_MODE && driver->logging_mode == USB_MODE) {
+		tty_diag_channel_close(driver->legacy_ch);
+		driver->legacy_ch = usb_diag_open(DIAG_LEGACY,
+					driver, diag_usb_legacy_notifier);
 	}
 	success = 1;
 	return success;
@@ -904,6 +922,7 @@ long diagchar_ioctl(struct file *filp,
 	struct diag_dci_health_stats stats;
 	struct diag_log_event_stats le_stats;
 	struct diagpkt_delay_params delay_params;
+	struct diag_smd_info *smd_info;
 
 	switch (iocmd) {
 	case DIAG_IOCTL_COMMAND_REG:
@@ -1108,6 +1127,21 @@ long diagchar_ioctl(struct file *filp,
 		else
 			result = 1;
 		break;
+	case DIAG_IOCTL_OPTIMIZED_LOGGING:
+		mutex_lock(&driver->diagchar_mutex);
+		optimized_logging = (unsigned int)ioarg;
+		mutex_unlock(&driver->diagchar_mutex);
+		pr_debug("diag: optimized_logging = %d\n", optimized_logging);
+		result = 1;
+		break;
+	case DIAG_IOCTL_OPTIMIZED_LOGGING_FLUSH:
+		smd_info = &driver->smd_cntl[MODEM_DATA];
+		pr_debug("diag: optimized logging flush BP buffer\n");
+		diag_send_diag_flush(smd_info);
+		result = 1;
+		break;
+	default:
+		DIAGADDON_ioctl(&result, filp, iocmd, ioarg);
 	}
 	return result;
 }
@@ -1380,7 +1414,9 @@ static int diagchar_write(struct file *file, const char __user *buf,
 		return -EBADMSG;
 	}
 #ifdef CONFIG_DIAG_OVER_USB
-	if (((pkt_type != DCI_DATA_TYPE) && (driver->logging_mode == USB_MODE)
+	if (((pkt_type != DCI_DATA_TYPE) &&
+				(driver->logging_mode == USB_MODE || 
+				 driver->logging_mode == TTY_MODE)
 				&& (!driver->usb_connected)) ||
 				(driver->logging_mode == NO_LOGGING_MODE)) {
 		/*Drop the diag payload */
@@ -1571,7 +1607,7 @@ static int diagchar_write(struct file *file, const char __user *buf,
 				/* wait sending mask updates
 				 * if HSIC ch not ready */
 				if (diag_hsic[index].in_busy_hsic_write)
-					wait_event_interruptible(driver->wait_q,
+				wait_event_interruptible(driver->wait_q,
 						(diag_hsic[index].
 						 in_busy_hsic_write != 1));
 				diag_hsic[index].in_busy_hsic_write = 1;
@@ -1580,21 +1616,21 @@ static int diagchar_write(struct file *file, const char __user *buf,
 				err = diag_bridge_write(index,
 						driver->user_space_data +
 						token_offset, payload_size);
-				if (err) {
-					pr_err("diag: err sending mask to MDM: %d\n",
-					       err);
-					/*
+			if (err) {
+				pr_err("diag: err sending mask to MDM: %d\n",
+									 err);
+				/*
 					* If the error is recoverable, then
 					* clear the write flag, so we will
-					* resubmit a write on the next frame.
+				* resubmit a write on the next frame.
 					* Otherwise, don't resubmit a write
 					* on the next frame.
-					*/
-					if ((-ESHUTDOWN) != err)
+				*/
+				if ((-ESHUTDOWN) != err)
 						diag_hsic[index].
 							in_busy_hsic_write = 0;
 				 }
-			 }
+			}
 		}
 		if (driver->diag_smux_enabled && (remote_proc == QSC)
 						&& driver->lcid) {
@@ -1727,6 +1763,7 @@ static int diagchar_write(struct file *file, const char __user *buf,
 	}
 
 	driver->used = (uint32_t) enc.dest - (uint32_t) buf_hdlc;
+	DIAGADDON_force_returntype(&pkt_type, pkt_type);
 	if (pkt_type == DATA_TYPE_RESPONSE) {
 		err = diag_device_write(buf_hdlc, APPS_DATA, NULL);
 		if (err) {
@@ -1836,10 +1873,95 @@ static const struct file_operations diagcharfops = {
 	.release = diagchar_close
 };
 
+static ssize_t diag_logging_mode_show(struct device *dev,
+		struct device_attribute *attr, char *buff)
+{
+
+	switch (driver->logging_mode) {
+	case USB_MODE:
+		return snprintf(buff, PAGE_SIZE, "%s", USB_MODE_NAME);
+	case MEMORY_DEVICE_MODE:
+		return snprintf(buff, PAGE_SIZE, "%s", MEMORY_DEVICE_MODE_NAME);
+	case NO_LOGGING_MODE:
+		return snprintf(buff, PAGE_SIZE, "%s", NO_LOGGING_MODE_NAME);
+	case UART_MODE:
+		return snprintf(buff, PAGE_SIZE, "%s", UART_MODE_NAME);
+	case TTY_MODE:
+		return snprintf(buff, PAGE_SIZE, "%s", TTY_MODE_NAME);
+	default:
+		return snprintf(buff, PAGE_SIZE, "%s", "invalid");
+	}
+}
+
+static ssize_t diag_logging_mode_store(struct device *dev,
+		struct device_attribute *attr, const char *buff, size_t size)
+{
+	char buf[256], *b;
+
+	strlcpy(buf, buff, sizeof(buf));
+	b = strim(buf);
+
+	if (strlen(b)) {
+		if (!strcmp(b, MEMORY_DEVICE_MODE_NAME))
+			diagchar_ioctl(NULL, DIAG_IOCTL_SWITCH_LOGGING, (int)MEMORY_DEVICE_MODE);
+		else if (!strcmp(b, NO_LOGGING_MODE_NAME))
+			diagchar_ioctl(NULL, DIAG_IOCTL_SWITCH_LOGGING, (int)NO_LOGGING_MODE);
+		else if (!strcmp(b, UART_MODE_NAME))
+			diagchar_ioctl(NULL, DIAG_IOCTL_SWITCH_LOGGING, (int)UART_MODE);
+#ifdef CONFIG_DIAG_OVER_USB
+		else if (!strcmp(b, USB_MODE_NAME))
+			diagchar_ioctl(NULL, DIAG_IOCTL_SWITCH_LOGGING, (int)USB_MODE);
+#endif
+#ifdef CONFIG_DIAG_OVER_TTY
+		else if (!strcmp(b, TTY_MODE_NAME))
+			diagchar_ioctl(NULL, DIAG_IOCTL_SWITCH_LOGGING, (int)TTY_MODE);
+#endif
+	}
+
+	return size;
+}
+
+#ifdef CONFIG_DIAG_OVER_TTY
+static ssize_t diag_dbg_ftm_show(struct device *dev,
+		struct device_attribute *attr, char *buff)
+{
+	/* print current dbg_ftm flag value */
+	return snprintf(buff, PAGE_SIZE, "%d",
+			tty_diag_get_dbg_ftm_flag_value());
+}
+
+static ssize_t diag_dbg_ftm_store(struct device *dev,
+		struct device_attribute *attr, const char *buff, size_t size)
+{
+	char buf[256], *b;
+
+	strlcpy(buf, buff, sizeof(buf));
+	b = strim(buf);
+
+	if (strnlen(b, 1)) {
+		if (!strncmp(b, "0", 1)) {
+			tty_diag_set_dbg_ftm_flag_value(0);
+		} else {
+			/* we consider other non-ZERO value as "1" here */
+			tty_diag_set_dbg_ftm_flag_value(1);
+		}
+	}
+
+	return size;
+}
+
+static DEVICE_ATTR(dbg_ftm, S_IRUGO | S_IWUSR, diag_dbg_ftm_show,
+						diag_dbg_ftm_store);
+#endif
+
+static DEVICE_ATTR(logging_mode, S_IRUGO | S_IWUSR, diag_logging_mode_show,
+						 diag_logging_mode_store);
+
 static int diagchar_setup_cdev(dev_t devno)
 {
 
 	int err;
+	struct device *dev;
 
 	cdev_init(driver->cdev, &diagcharfops);
 
@@ -1860,8 +1982,25 @@ static int diagchar_setup_cdev(dev_t devno)
 		return -1;
 	}
 
-	device_create(driver->diagchar_class, NULL, devno,
+	dev = device_create(driver->diagchar_class, NULL, devno,
 				  (void *)driver, "diag");
+	if (dev)
+		err = device_create_file(dev, &dev_attr_logging_mode);
+
+	if (!dev || err) {
+		printk(KERN_ERR "Error creating diag sysfs\n");
+		return -1;
+	}
+
+#ifdef CONFIG_DIAG_OVER_TTY
+	if (dev)
+		err = device_create_file(dev, &dev_attr_dbg_ftm);
+
+	if (!dev || err) {
+		printk(KERN_ERR "Error creating diag sysfs on dbg_ftm_mode\n");
+		return -ENXIO;
+	}
+#endif
 
 	return 0;
 
@@ -1925,7 +2064,7 @@ static int __init diagchar_init(void)
 	driver = kzalloc(sizeof(struct diagchar_dev) + 5, GFP_KERNEL);
 #ifdef CONFIG_DIAGFWD_BRIDGE_CODE
 	diag_bridge = kzalloc(MAX_BRIDGES * sizeof(struct diag_bridge_dev),
-								GFP_KERNEL);
+								 GFP_KERNEL);
 	if (!diag_bridge)
 		pr_warn("diag: could not allocate memory for bridges\n");
 	diag_hsic = kzalloc(MAX_HSIC_CH * sizeof(struct diag_hsic_dev),

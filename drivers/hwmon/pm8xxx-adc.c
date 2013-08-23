@@ -121,6 +121,10 @@
 #define PM8XXX_ADC_PA_THERM_VREG_UV_MIN			1800000
 #define PM8XXX_ADC_PA_THERM_VREG_UV_MAX			1800000
 #define PM8XXX_ADC_PA_THERM_VREG_UA_LOAD		100000
+#define PM8XXX_ADC_BATT_THERM_VREG_UV_MIN		1800000
+#define PM8XXX_ADC_BATT_THERM_VREG_UV_MAX		1800000
+#define PM8XXX_ADC_BATT_THERM_VREG_UA_LOAD		100000
+#define PM8XXX_ADC_BATT_THERM_VREG_SETTLE		3
 #define PM8XXX_ADC_HWMON_NAME_LENGTH			32
 #define PM8XXX_ADC_BTM_INTERVAL_MAX			0x14
 #define PM8XXX_ADC_COMPLETION_TIMEOUT			(2 * HZ)
@@ -145,6 +149,7 @@ struct pm8xxx_adc {
 	struct msm_xo_voter			*adc_voter;
 	int					msm_suspend_check;
 	struct pm8xxx_adc_amux_properties	*conv;
+	struct pm8xxx_adc_scale_tbl		*scale_tbls;
 	struct pm8xxx_adc_arb_btm_param		batt;
 	struct sensor_device_attribute		sens_attr[0];
 };
@@ -165,6 +170,7 @@ static const struct pm8xxx_adc_scaling_ratio pm8xxx_amux_scaling_ratio[] = {
 };
 
 static struct pm8xxx_adc *pmic_adc;
+static struct regulator *batt_therm;
 static struct regulator *pa_therm;
 
 static struct pm8xxx_adc_scale_fn adc_scale_fn[] = {
@@ -280,10 +286,57 @@ static int32_t pm8xxx_adc_patherm_power(bool on)
 					"with error %d\n", rc);
 			return rc;
 		}
+		msleep(30);
 	} else {
 		rc = regulator_disable(pa_therm);
 		if (rc < 0) {
 			pr_err("failed to disable pa_therm vreg "
+					"with error %d\n", rc);
+			return rc;
+		}
+	}
+
+	return rc;
+}
+
+static int32_t pm8xxx_adc_batt_therm_power(bool on)
+{
+	int rc = 0;
+
+	if (!batt_therm) {
+		pr_err("pm8xxx adc batt_therm not valid\n");
+		return -EINVAL;
+	}
+
+	if (on) {
+		rc = regulator_set_voltage(batt_therm,
+				PM8XXX_ADC_BATT_THERM_VREG_UV_MIN,
+				PM8XXX_ADC_BATT_THERM_VREG_UV_MAX);
+		if (rc < 0) {
+			pr_err("failed to set the voltage for "
+					"batt_therm with error %d\n", rc);
+			return rc;
+		}
+
+		rc = regulator_set_optimum_mode(batt_therm,
+				PM8XXX_ADC_BATT_THERM_VREG_UA_LOAD);
+		if (rc < 0) {
+			pr_err("failed to set optimum mode for "
+					"batt_therm with error %d\n", rc);
+			return rc;
+		}
+
+		rc = regulator_enable(batt_therm);
+		if (rc < 0) {
+			pr_err("failed to enable batt_therm vreg "
+					"with error %d\n", rc);
+			return rc;
+		}
+		mdelay(PM8XXX_ADC_BATT_THERM_VREG_SETTLE);
+	} else {
+		rc = regulator_disable(batt_therm);
+		if (rc < 0) {
+			pr_err("failed to disable batt_therm vreg "
 					"with error %d\n", rc);
 			return rc;
 		}
@@ -310,6 +363,10 @@ static int32_t pm8xxx_adc_channel_power_enable(uint32_t channel,
 	int rc = 0;
 
 	switch (channel) {
+	case CHANNEL_BATT_THERM:
+		rc = pm8xxx_adc_batt_therm_power(power_cntrl);
+		break;
+	case ADC_MPP_1_AMUX3:
 	case ADC_MPP_1_AMUX8:
 		rc = pm8xxx_adc_patherm_power(power_cntrl);
 		break;
@@ -695,6 +752,7 @@ uint32_t pm8xxx_adc_read(enum pm8xxx_adc_channels channel,
 	struct pm8xxx_adc *adc_pmic = pmic_adc;
 	int i = 0, rc = 0, rc_fail, amux_prescaling, scale_type;
 	enum pm8xxx_adc_premux_mpp_scale_type mpp_scale;
+	struct pm8xxx_adc_scale_tbl *scale_tbl;
 
 	if (!pm8xxx_adc_initialized)
 		return -ENODEV;
@@ -783,8 +841,14 @@ uint32_t pm8xxx_adc_read(enum pm8xxx_adc_channels channel,
 		goto fail;
 	}
 
+	if (adc_pmic->scale_tbls)
+		scale_tbl = &adc_pmic->scale_tbls[scale_type];
+	else
+		scale_tbl = NULL;
+
 	adc_scale_fn[scale_type].chan(result->adc_code,
-			adc_pmic->adc_prop, adc_pmic->conv->chan_prop, result);
+			adc_pmic->adc_prop, adc_pmic->conv->chan_prop, result,
+			scale_tbl);
 
 	rc = pm8xxx_adc_channel_power_enable(channel, false);
 	if (rc) {
@@ -864,6 +928,7 @@ uint32_t pm8xxx_adc_btm_configure(struct pm8xxx_adc_arb_btm_param *btm_param)
 	u8 arb_btm_cntrl1;
 	unsigned long flags = 0;
 	int rc;
+	struct pm8xxx_adc_scale_tbl *scale_tbl;
 
 	if (adc_pmic == NULL) {
 		pr_err("PMIC ADC not valid\n");
@@ -876,8 +941,14 @@ uint32_t pm8xxx_adc_btm_configure(struct pm8xxx_adc_arb_btm_param *btm_param)
 		return -EINVAL;
 	}
 
+	if (adc_pmic->scale_tbls)
+		scale_tbl = &adc_pmic->scale_tbls[ADC_SCALE_BATT_THERM];
+	else
+		scale_tbl = NULL;
+
 	rc = pm8xxx_adc_batt_scaler(btm_param, adc_pmic->adc_prop,
-					adc_pmic->conv->chan_prop);
+					adc_pmic->conv->chan_prop,
+					scale_tbl);
 	if (rc < 0) {
 		pr_err("Failed to lookup the BTM thresholds\n");
 		return rc;
@@ -1172,7 +1243,11 @@ static int __devexit pm8xxx_adc_teardown(struct platform_device *pdev)
 	msm_xo_put(adc_pmic->adc_voter);
 	platform_set_drvdata(pdev, NULL);
 	pmic_adc = NULL;
-	if (!pa_therm) {
+	if (batt_therm) {
+		regulator_put(batt_therm);
+		batt_therm = NULL;
+	}
+	if (pa_therm) {
 		regulator_put(pa_therm);
 		pa_therm = NULL;
 	}
@@ -1220,6 +1295,7 @@ static int __devinit pm8xxx_adc_probe(struct platform_device *pdev)
 	adc_pmic->adc_channel = pdata->adc_channel;
 	adc_pmic->adc_num_board_channel = pdata->adc_num_board_channel;
 	adc_pmic->mpp_base = pdata->adc_mpp_base;
+	adc_pmic->scale_tbls = pdata->scale_tbls;
 
 	mutex_init(&adc_pmic->adc_lock);
 	mutex_init(&adc_pmic->mpp_adc_lock);
@@ -1287,6 +1363,13 @@ static int __devinit pm8xxx_adc_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to initialize pm8xxx hwmon adc\n");
 	}
 	adc_pmic->hwmon = hwmon_device_register(adc_pmic->dev);
+
+	batt_therm = regulator_get(adc_pmic->dev, "batt_therm");
+	if (IS_ERR(batt_therm)) {
+		rc = PTR_ERR(batt_therm);
+		pr_err("failed to request batt_therm vreg with error %d\n", rc);
+		batt_therm = NULL;
+	}
 
 	if (adc_pmic->adc_voter == NULL) {
 		adc_pmic->adc_voter = msm_xo_get(MSM_XO_TCXO_D0, "pmic_xoadc");

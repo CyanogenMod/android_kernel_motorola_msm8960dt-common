@@ -238,7 +238,28 @@ static struct vfe32_cmd_type vfe32_cmd[] = {
 		{VFE_CMD_STATS_BHIST_START, V32_STATS_BHIST_LEN,
 			V32_STATS_BHIST_OFF},
 		{VFE_CMD_STATS_BHIST_STOP},
-/*149*/	{VFE_CMD_SELECT_RDI},
+		{VFE_CMD_RESET_2},
+/*150*/	{VFE_CMD_FOV_ENC_CFG},
+		{VFE_CMD_FOV_VIEW_CFG},
+		{VFE_CMD_FOV_ENC_UPDATE},
+		{VFE_CMD_FOV_VIEW_UPDATE},
+		{VFE_CMD_SCALER_ENC_CFG},
+/*155*/	{VFE_CMD_SCALER_VIEW_CFG},
+		{VFE_CMD_SCALER_ENC_UPDATE},
+		{VFE_CMD_SCALER_VIEW_UPDATE},
+		{VFE_CMD_COLORXFORM_ENC_CFG},
+		{VFE_CMD_COLORXFORM_VIEW_CFG},
+/*160*/	{VFE_CMD_COLORXFORM_ENC_UPDATE},
+		{VFE_CMD_COLORXFORM_VIEW_UPDATE},
+		{VFE_CMD_TEST_GEN_CFG},
+		{VFE_CMD_SELECT_RDI},
+		{VFE_CMD_SET_STATS_VER},
+/*165*/	{VFE_CMD_RGB_ALL_CFG},
+		{VFE_CMD_RGB_ALL_UPDATE},
+		{VFE_CMD_STATS_BG_CFG, V32_STATS_BG_LEN, V32_STATS_BG_OFF},
+		{VFE_CMD_STATS_BF_CFG, V32_STATS_BF_LEN, V32_STATS_BF_OFF},
+		{VFE_CMD_STATS_BHIST_CFG, V32_STATS_BHIST_LEN,
+			V32_STATS_BHIST_OFF},
 };
 
 uint32_t vfe32_AXI_WM_CFG[] = {
@@ -1066,21 +1087,18 @@ static void vfe32_set_default_reg_values(
 			vfe32_ctrl->share_ctrl->vfebase +
 				VFE_BUS_STATS_HIST_UB_CFG);
 	} else {
-		msm_camera_io_w(0x316001F,
-			vfe32_ctrl->share_ctrl->vfebase +
-				VFE_BUS_STATS_HIST_UB_CFG);
-		msm_camera_io_w(0x336005C,
-			vfe32_ctrl->share_ctrl->vfebase +
-				VFE_BUS_STATS_AEC_BG_UB_CFG);
-		msm_camera_io_w(0x393003C,
-			vfe32_ctrl->share_ctrl->vfebase +
-				VFE_BUS_STATS_AF_BF_UB_CFG);
-		msm_camera_io_w(0x3D00007,
+		msm_camera_io_w(0x32F0007,
 			vfe32_ctrl->share_ctrl->vfebase +
 				VFE_BUS_STATS_RS_UB_CFG);
-		msm_camera_io_w(0x3D8001F,
+		msm_camera_io_w(0x337001F,
 			vfe32_ctrl->share_ctrl->vfebase +
 				VFE_BUS_STATS_CS_UB_CFG);
+		msm_camera_io_w(0x357001F,
+			vfe32_ctrl->share_ctrl->vfebase +
+				VFE_BUS_STATS_HIST_UB_CFG);
+		msm_camera_io_w(0x3770080,
+			vfe32_ctrl->share_ctrl->vfebase +
+				VFE_BUS_STATS_AEC_BG_UB_CFG);
 		msm_camera_io_w(0x3F80007,
 			vfe32_ctrl->share_ctrl->vfebase +
 				VFE_BUS_STATS_SKIN_BHIST_UB_CFG);
@@ -1252,8 +1270,16 @@ static unsigned long vfe32_stats_dqbuf(struct vfe32_ctrl_type *vfe32_ctrl,
 {
 	struct msm_stats_meta_buf *buf = NULL;
 	int rc = 0;
-	rc = vfe32_ctrl->stats_ops.dqbuf(
-			vfe32_ctrl->stats_ops.stats_ctrl, stats_type, &buf);
+	if (vfe32_ctrl &&
+		vfe32_ctrl->stats_ops.dqbuf &&
+		vfe32_ctrl->stats_ops.stats_ctrl) {
+		rc = vfe32_ctrl->stats_ops.dqbuf(
+			 vfe32_ctrl->stats_ops.stats_ctrl, stats_type, &buf);
+	} else {
+		pr_err("%s: stats_ctrl ops not initialized", __func__);
+		return 0L;
+	}
+
 	if (rc < 0) {
 		CDBG("%s: dq stats buf (type = %d) err = %d",
 			__func__, stats_type, rc);
@@ -3578,6 +3604,12 @@ static inline void vfe32_read_irq_status(
 	out->camifStatus = msm_camera_io_r(temp);
 	CDBG("camifStatus  = 0x%x\n", out->camifStatus);
 
+	/* Clear out CAMIF errors to prevent overloading IRQ/tasklet */
+	if (out->vfeIrqStatus1 & VFE32_IMASK_CAMIF_ERROR &&
+	    out->camifStatus & VFE32_CAMIF_ERR_MASK)
+		msm_camera_io_w(CAMIF_COMMAND_CLEAR,
+			axi_ctrl->share_ctrl->vfebase + VFE_CAMIF_COMMAND);
+
 	/* clear the pending interrupt of the same kind.*/
 	msm_camera_io_w(out->vfeIrqStatus0,
 		axi_ctrl->share_ctrl->vfebase + VFE_IRQ_CLEAR_0);
@@ -4457,7 +4489,11 @@ static void vfe32_process_output_path_irq_0(
 
 	} else {
 		axi_ctrl->share_ctrl->outpath.out0.frame_drop_cnt++;
-		CDBG("path_irq_0 - no free buffer!\n");
+		if (axi_ctrl->share_ctrl->current_mode &
+				VFE_OUTPUTS_VIDEO_AND_PREVIEW)
+			pr_err("path_irq_0 - no free buffer!\n");
+		else
+			CDBG("path_irq_0 - no free buffer!\n");
 	}
 }
 
@@ -4535,7 +4571,11 @@ static void vfe32_process_output_path_irq_1(
 
 	} else {
 		axi_ctrl->share_ctrl->outpath.out1.frame_drop_cnt++;
-		CDBG("path_irq_1 - no free buffer!\n");
+		if (axi_ctrl->share_ctrl->current_mode &
+				VFE_OUTPUTS_VIDEO_AND_PREVIEW)
+			pr_err("path_irq_1 - no free buffer!\n");
+		else
+			CDBG("path_irq_1 - no free buffer!\n");
 	}
 }
 

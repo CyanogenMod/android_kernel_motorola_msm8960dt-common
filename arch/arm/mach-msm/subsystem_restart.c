@@ -60,6 +60,7 @@ struct subsys_device {
 	struct work_struct work;
 	spinlock_t restart_lock;
 	int restart_count;
+	int subsys_restart_count;
 
 	void *notify;
 
@@ -79,6 +80,21 @@ static LIST_HEAD(subsystem_list);
 static DEFINE_MUTEX(subsystem_list_lock);
 static DEFINE_MUTEX(soc_order_reg_lock);
 static DEFINE_MUTEX(restart_log_mutex);
+
+static int subsys_restart_count_get(char *buffer, struct kernel_param *kp)
+{
+	struct subsys_device *dev;
+	int count = 0;
+	mutex_lock(&subsystem_list_lock);
+	list_for_each_entry(dev, &subsystem_list, list)
+		count += scnprintf(buffer+count, PAGE_SIZE-count, "%s %d\n",
+			dev->desc->name, dev->subsys_restart_count);
+	mutex_unlock(&subsystem_list_lock);
+	return count;
+}
+
+module_param_call(restart_count, NULL,
+	subsys_restart_count_get, NULL, S_IRUGO);
 
 /* SOC specific restart orders go here */
 
@@ -257,9 +273,10 @@ static void do_epoch_check(struct subsys_device *dev)
 	if (time_first && n >= max_restarts_check) {
 		if ((curr_time->tv_sec - time_first->tv_sec) <
 				max_history_time_check) {
-			panic("Subsystems have crashed %d times in less than "\
+			pr_err("Subsystems have crashed %d times in less than "\
 				"%ld seconds!", max_restarts_check,
 				max_history_time_check);
+			BUG();
 		}
 	}
 
@@ -297,8 +314,9 @@ static void subsystem_shutdown(struct subsys_device *dev, void *data)
 
 	pr_info("[%p]: Shutting down %s\n", current, name);
 	if (dev->desc->shutdown(dev->desc) < 0) {
-		panic("subsys-restart: [%p]: Failed to shutdown %s!",
+		pr_err("subsys-restart: [%p]: Failed to shutdown %s!",
 			current, name);
+		BUG();
 	}
 }
 
@@ -317,7 +335,8 @@ static void subsystem_powerup(struct subsys_device *dev, void *data)
 
 	pr_info("[%p]: Powering up %s\n", current, name);
 	if (dev->desc->powerup(dev->desc) < 0) {
-		panic("[%p]: Failed to powerup %s!", current, name);
+		pr_err("[%p]: Failed to powerup %s!", current, name);
+		BUG();
 	}
 }
 
@@ -371,8 +390,9 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	 * out, since a subsystem died in its powerup sequence.
 	 */
 	if (!mutex_trylock(powerup_lock)) {
-		panic("%s[%p]: Subsystem died during powerup!",
+		pr_err("%s[%p]: Subsystem died during powerup!",
 						__func__, current);
+		BUG();
 	}
 
 	do_epoch_check(dev);
@@ -433,6 +453,7 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 	if (!dev->restart_count)
 		wake_lock(&dev->wake_lock);
 	dev->restart_count++;
+	dev->subsys_restart_count++;
 	spin_unlock_irqrestore(&dev->restart_lock, flags);
 
 	if (!queue_work(ssr_wq, &dev->work)) {
@@ -469,10 +490,12 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		__subsystem_restart_dev(dev);
 		break;
 	case RESET_SOC:
-		panic("subsys-restart: Resetting the SoC - %s crashed.", name);
+		pr_err("subsys-restart: Resetting the SoC - %s crashed.", name);
+		BUG();
 		break;
 	default:
-		panic("subsys-restart: Unknown restart level!\n");
+		pr_err("subsys-restart: Unknown restart level!\n");
+		BUG();
 		break;
 	}
 
@@ -601,8 +624,10 @@ static int __init subsys_restart_init(void)
 	restart_level = RESET_SOC;
 
 	ssr_wq = alloc_workqueue("ssr_wq", WQ_CPU_INTENSIVE, 0);
-	if (!ssr_wq)
-		panic("%s: out of memory\n", __func__);
+	if (!ssr_wq) {
+		pr_err("%s: out of memory\n", __func__);
+		BUG();
+	}
 
 	return ssr_init_soc_restart_orders();
 }

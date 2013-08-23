@@ -76,6 +76,15 @@
 #define MSMFB_WRITEBACK_SET_MIRRORING_HINT _IOW(MSMFB_IOCTL_MAGIC, 165, \
 						unsigned int)
 #define MSMFB_METADATA_GET  _IOW(MSMFB_IOCTL_MAGIC, 166, struct msmfb_metadata)
+#define MSMFB_REG_READ   _IOWR(MSMFB_IOCTL_MAGIC, 64, struct msmfb_reg_access)
+#define MSMFB_REG_WRITE  _IOW(MSMFB_IOCTL_MAGIC, 65, struct msmfb_reg_access)
+
+#define MSMFB_HIDE_IMG				_IOW(MSMFB_IOCTL_MAGIC, 170, \
+						int)
+#define MSMFB_PREPARE_FOR_SUSPEND	_IOW(MSMFB_IOCTL_MAGIC, 171, \
+						struct msmfb_suspend_cfg)
+#define MSMFB_PREPARE_FOR_RESUME	_IOW(MSMFB_IOCTL_MAGIC, 172, \
+						struct msmfb_resume_cfg)
 
 #define FB_TYPE_3D_PANEL 0x10101010
 #define MDP_IMGTYPE2_START 0x10000
@@ -177,6 +186,22 @@ enum {
 #define MDP_FB_PAGE_PROTECTION_INVALID           (5)
 /* Count of the number of MDP_FB_PAGE_PROTECTION_... values. */
 #define MDP_NUM_FB_PAGE_PROTECTION_VALUES        (5)
+
+#define MSMFB_RESUME_CFG_STATE_DISP_OFF_SLEEP_OUT 0
+#define MSMFB_RESUME_CFG_STATE_DISP_ON_SLEEP_OUT  1
+#define MSMFB_RESUME_CFG_STATE_DISP_OFF_SLEEP_IN  2
+#define MSMFB_RESUME_CFG_STATE_INVALID            3
+
+struct msmfb_suspend_cfg {
+	unsigned int partial;
+};
+
+struct msmfb_resume_cfg {
+	unsigned int partial;
+	unsigned int panel_state;
+	unsigned int gamma;
+	unsigned int keep_hidden;
+};
 
 struct mdp_rect {
 	uint32_t x;
@@ -600,6 +625,13 @@ struct msmfb_mixer_info_req {
 	int mixer_num;
 	int cnt;
 	struct mdp_mixer_info info[MAX_PIPE_PER_MIXER];
+};
+
+struct msmfb_reg_access {
+	uint8_t address;
+	uint8_t use_hs_mode;
+	size_t buffer_size;
+	void __user *buffer;
 };
 
 enum {

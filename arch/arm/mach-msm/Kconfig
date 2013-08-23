@@ -172,6 +172,7 @@ config ARCH_MSM8960
 	select MSM_KRAIT_WFE_FIXUP
 	select MSM_IOMMU_GPU_SYNC
 	select MSM_CPU_PWRCTL
+	select HAS_MACH_MEMUTILS
 
 config ARCH_MSM8930
 	bool "MSM8930"
@@ -851,6 +852,13 @@ config MACH_MSM9615_MTP
 	bool "MSM9615 MTP"
 	help
 	  Support for the Qualcomm MSM9615 MTP device.
+
+config MACH_MSM8960_MMI
+	depends on ARCH_MSM8960
+	bool "MSM8960 MMI"
+	select USE_OF
+	help
+	  Support for Motorola Mobility MSM8960 devices.
 
 config MSM_USE_TSIF1
 	depends on ARCH_MSM8X60
@@ -2158,6 +2166,16 @@ config MSM_WATCHDOG
 		not run during the bootup process, so it will not catch any early
 		lockups.
 
+config MSM_WATCHDOG_CTX_PRINT
+	bool "Print context dump saved by secure mode watchdog handler"
+	default n
+	depends on MSM_WATCHDOG
+	help
+		After enabling this option, kernel will reserve bigger buffer
+		for secure mode watchdog handler to save info. And kernel will
+		try to print the info if it looks valid.
+		If unsure, say N
+
 config MSM_WATCHDOG_V2
 	bool "MSM Watchdog Support"
 	help
@@ -2492,6 +2510,21 @@ config MSM_L1_ERR_PANIC
 
 	  For production builds, you should probably say 'N' here.
 
+config MSM_L1_RECOV_ERR_PANIC
+	bool "Panic on recoverable L1 cache errors"
+	depends on MSM_CACHE_ERP && MSM_L1_ERR_PANIC
+	help
+	  Certain CPU designs may be able to automatically recover from certain
+	  kinds of L1 cache errors, even though the L1 cache itself may not
+	  support error correction. These errors should not result in any kind
+	  of corruption, but their presence is nevertheless an indication of
+	  poor system health. To cause the kernel to panic whenever a
+	  recoverable L1 cache error is detected, say 'Y' here. This may be
+	  useful as a debugging technique if general system instability is
+	  suspected.
+
+	  For production builds, you should definitely say 'N' here.
+
 config MSM_L1_ERR_LOG
 	bool "Log CPU ERP events to system memory"
 	depends on MSM_CACHE_ERP
@@ -2614,5 +2647,33 @@ config MSM_CPU_PWRCTL
 	  Droop detector mechanism can adversely affect krait plls during
 	  stand alone power collapse operation. Selecting this option
 	  ensures that they are always off.
+
+config HOB_SHARED_RAM_MMI
+	depends on ARCH_MSM
+	default n
+	bool "Motorola Mobility HOB RAM MMAP Client"
+	help
+	Provide mechanism to access hob storage shared memory on apps processor.
+	HOB or the HandOver Block is the staging area for Phasing Data.
+
+config MMI_RAM_INFO
+	depends on ARCH_MSM
+	default n
+	bool "Motorola Mobility RAM Info"
+	help
+	Provide mechanism to access RAM size and MR registers values via sysfs.
+
+config MMI_ACPU_INFO
+	depends on ARCH_MSM && ARCH_MSM8960
+	default n
+	bool "Motorola Mobility ACPU Info"
+	help
+	Provide mechanism to access ACPU binning info via procfs.
+
+config HAS_MACH_MEMUTILS
+	default n
+	bool "Motorola MSM memcpy enhancements"
+	help
+	Faster memcpy performance for Krait
 
 endif

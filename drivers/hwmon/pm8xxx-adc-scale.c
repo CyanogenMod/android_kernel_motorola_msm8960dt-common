@@ -533,7 +533,8 @@ static int32_t pm8xxx_adc_map_batt_therm(const struct pm8xxx_adc_map_pt *pts,
 int32_t pm8xxx_adc_scale_default(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
-		struct pm8xxx_adc_chan_result *adc_chan_result)
+		struct pm8xxx_adc_chan_result *adc_chan_result,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
 	bool negative_rawfromoffset = 0, negative_offset = 0;
 	int64_t scale_voltage = 0;
@@ -614,16 +615,26 @@ static int64_t pm8xxx_adc_scale_ratiometric_calib(int32_t adc_code,
 int32_t pm8xxx_adc_scale_batt_therm(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
-		struct pm8xxx_adc_chan_result *adc_chan_result)
+		struct pm8xxx_adc_chan_result *adc_chan_result,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
+	const struct pm8xxx_adc_map_pt *lu_tbl = adcmap_btm_threshold;
+	uint32_t lu_tbl_size = ARRAY_SIZE(adcmap_btm_threshold);
 	int64_t bat_voltage = 0;
 
 	bat_voltage = pm8xxx_adc_scale_ratiometric_calib(adc_code,
 			adc_properties, chan_properties);
 
+	if (scale_tbl) {
+		if (scale_tbl->scale_lu_tbl) {
+			lu_tbl = scale_tbl->scale_lu_tbl;
+			lu_tbl_size = scale_tbl->scale_lu_tbl_size;
+		}
+	}
+
 	return pm8xxx_adc_map_batt_therm(
-			adcmap_btm_threshold,
-			ARRAY_SIZE(adcmap_btm_threshold),
+			lu_tbl,
+			lu_tbl_size,
 			bat_voltage,
 			&adc_chan_result->physical);
 }
@@ -632,7 +643,8 @@ EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_batt_therm);
 int32_t pm8xxx_adc_scale_pa_therm(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
-		struct pm8xxx_adc_chan_result *adc_chan_result)
+		struct pm8xxx_adc_chan_result *adc_chan_result,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
 	int64_t pa_voltage = 0;
 
@@ -666,7 +678,8 @@ EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_batt_id);
 int32_t pm8xxx_adc_scale_pmic_therm(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
-		struct pm8xxx_adc_chan_result *adc_chan_result)
+		struct pm8xxx_adc_chan_result *adc_chan_result,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
 	int64_t pmic_voltage = 0;
 	bool negative_offset = 0;
@@ -713,7 +726,8 @@ EXPORT_SYMBOL_GPL(pm8xxx_adc_scale_pmic_therm);
 int32_t pm8xxx_adc_tdkntcg_therm(int32_t adc_code,
 		const struct pm8xxx_adc_properties *adc_properties,
 		const struct pm8xxx_adc_chan_properties *chan_properties,
-		struct pm8xxx_adc_chan_result *adc_chan_result)
+		struct pm8xxx_adc_chan_result *adc_chan_result,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
 	int64_t xo_thm = 0;
 
@@ -735,13 +749,23 @@ EXPORT_SYMBOL_GPL(pm8xxx_adc_tdkntcg_therm);
 
 int32_t pm8xxx_adc_batt_scaler(struct pm8xxx_adc_arb_btm_param *btm_param,
 		const struct pm8xxx_adc_properties *adc_properties,
-		const struct pm8xxx_adc_chan_properties *chan_properties)
+		const struct pm8xxx_adc_chan_properties *chan_properties,
+		struct pm8xxx_adc_scale_tbl *scale_tbl)
 {
+	const struct pm8xxx_adc_map_pt *lu_tbl = adcmap_btm_threshold;
+	uint32_t lu_tbl_size = ARRAY_SIZE(adcmap_btm_threshold);
 	int rc;
 
+	if (scale_tbl) {
+		if (scale_tbl->scale_lu_tbl) {
+			lu_tbl = scale_tbl->scale_lu_tbl;
+			lu_tbl_size = scale_tbl->scale_lu_tbl_size;
+		}
+	}
+
 	rc = pm8xxx_adc_map_linear(
-		adcmap_btm_threshold,
-		ARRAY_SIZE(adcmap_btm_threshold),
+		lu_tbl,
+		lu_tbl_size,
 		(btm_param->low_thr_temp),
 		&btm_param->low_thr_voltage);
 	if (rc)
@@ -754,8 +778,8 @@ int32_t pm8xxx_adc_batt_scaler(struct pm8xxx_adc_arb_btm_param *btm_param,
 		chan_properties->adc_graph[ADC_CALIB_RATIOMETRIC].adc_gnd;
 
 	rc = pm8xxx_adc_map_linear(
-		adcmap_btm_threshold,
-		ARRAY_SIZE(adcmap_btm_threshold),
+		lu_tbl,
+		lu_tbl_size,
 		(btm_param->high_thr_temp),
 		&btm_param->high_thr_voltage);
 	if (rc)

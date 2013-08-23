@@ -24,6 +24,7 @@
 #include <linux/of.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
+#include <linux/power/pm_debug.h>
 
 #include <asm/mach/irq.h>
 
@@ -166,30 +167,25 @@ static int msm_gpio_direction_output(struct gpio_chip *chip,
 	return 0;
 }
 
-#ifdef CONFIG_OF
 static int msm_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 {
 	struct msm_gpio_dev *g_dev = to_msm_gpio_dev(chip);
 	struct irq_domain *domain = g_dev->domain;
-	return irq_linear_revmap(domain, offset);
+	if (domain)
+		return irq_create_mapping(domain, offset);
+	else
+		return MSM_GPIO_TO_INT(offset - chip->base);
 }
 
 static inline int msm_irq_to_gpio(struct gpio_chip *chip, unsigned irq)
 {
 	struct irq_data *irq_data = irq_get_irq_data(irq);
-	return irq_data->hwirq;
+	struct msm_gpio_dev *g_dev = to_msm_gpio_dev(chip);
+	if (g_dev->domain)
+		return irq_data->hwirq;
+	else
+		return irq - MSM_GPIO_TO_INT(chip->base);
 }
-#else
-static int msm_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
-{
-	return MSM_GPIO_TO_INT(offset - chip->base);
-}
-
-static inline int msm_irq_to_gpio(struct gpio_chip *chip, unsigned irq)
-{
-	return irq - MSM_GPIO_TO_INT(chip->base);
-}
-#endif
 
 static int msm_gpio_request(struct gpio_chip *chip, unsigned offset)
 {
@@ -433,12 +429,14 @@ void msm_gpio_show_resume_irq(void)
 		return;
 
 	spin_lock_irqsave(&tlmm_lock, irq_flags);
+	wakeup_source_gpio_cleanup();
 	for_each_set_bit(i, msm_gpio.wake_irqs, NR_MSM_GPIOS) {
 		intstat = __msm_gpio_get_intr_status(i);
 		if (intstat) {
 			irq = msm_gpio_to_irq(&msm_gpio.gpio_chip, i);
 			pr_warning("%s: %d triggered\n",
 				__func__, irq);
+			wakeup_source_gpio_add_irq(irq);
 		}
 	}
 	spin_unlock_irqrestore(&tlmm_lock, irq_flags);
@@ -539,9 +537,11 @@ static struct lock_class_key msm_gpio_lock_class;
 static int __devinit msm_gpio_probe(struct platform_device *pdev)
 {
 	int ret;
-#ifndef CONFIG_OF
 	int irq, i;
-#endif
+
+	if (msm_gpio.gpio_chip.dev)
+		return -EEXIST;
+
 	msm_gpio.gpio_chip.dev = &pdev->dev;
 	spin_lock_init(&tlmm_lock);
 	bitmap_zero(msm_gpio.enabled_irqs, NR_MSM_GPIOS);
@@ -551,15 +551,15 @@ static int __devinit msm_gpio_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-#ifndef CONFIG_OF
-	for (i = 0; i < msm_gpio.gpio_chip.ngpio; ++i) {
-		irq = msm_gpio_to_irq(&msm_gpio.gpio_chip, i);
-		irq_set_lockdep_class(irq, &msm_gpio_lock_class);
-		irq_set_chip_and_handler(irq, &msm_gpio_irq_chip,
-					 handle_level_irq);
-		set_irq_flags(irq, IRQF_VALID);
-	}
-#endif
+	if (!pdev->dev.of_node)
+		for (i = 0; i < msm_gpio.gpio_chip.ngpio; ++i) {
+			irq = msm_gpio_to_irq(&msm_gpio.gpio_chip, i);
+			irq_set_lockdep_class(irq, &msm_gpio_lock_class);
+			irq_set_chip_and_handler(irq, &msm_gpio_irq_chip,
+						 handle_level_irq);
+			set_irq_flags(irq, IRQF_VALID);
+		}
+
 	ret = request_irq(TLMM_MSM_SUMMARY_IRQ, msm_summary_irq_handler,
 			IRQF_TRIGGER_HIGH, "msmgpio", NULL);
 	if (ret) {
@@ -660,6 +660,32 @@ int __init msm_gpio_of_init(struct device_node *node,
 		return -ENOMEM;
 	}
 
+	return 0;
+}
+
+int __init msm_gpio_of_init_legacy(struct device_node *node,
+				   struct device_node *parent)
+{
+	msm_gpio.domain = irq_domain_add_legacy(node, NR_MSM_GPIOS,
+			(unsigned int)(MSM_GPIO_TO_INT(0)), 0,
+			&msm_gpio_irq_domain_ops, &msm_gpio);
+	if (!msm_gpio.domain) {
+		WARN(1, "Cannot allocate irq_domain\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+#else
+int __init msm_gpio_of_init(struct device_node *node,
+			    struct device_node *parent)
+{
+	return 0;
+}
+
+int __init msm_gpio_of_init_legacy(struct device_node *node,
+				   struct device_node *parent)
+{
 	return 0;
 }
 #endif

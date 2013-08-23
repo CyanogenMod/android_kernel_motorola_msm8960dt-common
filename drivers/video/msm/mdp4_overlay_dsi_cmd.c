@@ -31,6 +31,9 @@
 #include "mipi_dsi.h"
 #include "mdp4.h"
 
+#define TOUT_PERIOD	HZ	/* 1 second */
+#define MS_100		(HZ/10)	/* 100 ms */
+
 static int vsync_start_y_adjust = 4;
 
 #define MAX_CONTROLLER	1
@@ -40,8 +43,7 @@ static int vsync_start_y_adjust = 4;
  * VSYNC_EXPIRE_TICK == 4 is recommended
  */
 #define VSYNC_EXPIRE_TICK 4
-
-#define VSYNC_MIN_DIFF_MS 4
+static bool dsi_panel_on;
 
 static struct vsycn_ctrl {
 	struct device *dev;
@@ -57,7 +59,6 @@ static struct vsycn_ctrl {
 	uint32 rdptr_intr_tot;
 	uint32 rdptr_sirq_tot;
 	atomic_t suspend;
-	int wait_vsync_cnt;
 	int blt_change;
 	int blt_free;
 	int blt_end;
@@ -66,15 +67,16 @@ static struct vsycn_ctrl {
 	struct completion ov_comp;
 	struct completion dmap_comp;
 	struct completion vsync_comp;
+	struct completion show_event_comp;
 	spinlock_t spin_lock;
 	struct msm_fb_data_type *mfd;
 	struct mdp4_overlay_pipe *base_pipe;
 	struct vsync_update vlist[2];
 	int vsync_enabled;
 	int clk_enabled;
+	int new_update;
 	int clk_control;
 	ktime_t vsync_time;
-	u32 last_vsync_ms;
 	struct work_struct clk_work;
 } vsync_ctrl_db[MAX_CONTROLLER];
 
@@ -454,9 +456,8 @@ void mdp4_dsi_cmd_vsync_ctrl(struct fb_info *info, int enable)
 			mipi_dsi_clk_cfg(1);
 			mdp_clk_ctrl(1);
 			vctrl->clk_enabled = 1;
+			vctrl->new_update = 1;
 			clk_set_on = 1;
-			vctrl->last_vsync_ms =
-				ktime_to_ms(ktime_get()) - VSYNC_MIN_DIFF_MS;
 		}
 		if (clk_set_on) {
 			vsync_irq_enable(INTR_PRIMARY_RDPTR,
@@ -475,6 +476,8 @@ void mdp4_dsi_cmd_wait4vsync(int cndx)
 	struct vsycn_ctrl *vctrl;
 	struct mdp4_overlay_pipe *pipe;
 	unsigned long flags;
+	static int timeout_occurred[MAX_CONTROLLER];
+	uint32 prev_rdptr_intr;
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -488,18 +491,31 @@ void mdp4_dsi_cmd_wait4vsync(int cndx)
 		return;
 
 	spin_lock_irqsave(&vctrl->spin_lock, flags);
-	if (vctrl->wait_vsync_cnt == 0)
-		INIT_COMPLETION(vctrl->vsync_comp);
-	vctrl->wait_vsync_cnt++;
+	INIT_COMPLETION(vctrl->vsync_comp);
 	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 
-	wait_for_completion(&vctrl->vsync_comp);
+	prev_rdptr_intr = vctrl->rdptr_intr_tot;
+	if (!wait_for_completion_timeout(&vctrl->vsync_comp,
+			msecs_to_jiffies(VSYNC_PERIOD * 4))) {
+		pr_err("%s: TIMEOUT (rdptr_intr: prev: %u cur: %u)\n", __func__,
+			prev_rdptr_intr, vctrl->rdptr_intr_tot);
+		timeout_occurred[cndx] = 1;
+		mdp4_hang_dump(__func__);
+	} else {
+		if (timeout_occurred[cndx])
+			pr_info("%s: recovered from previous timeout\n",
+				__func__);
+		timeout_occurred[cndx] = 0;
+	}
 	mdp4_stat.wait4vsync0++;
 }
 
 static void mdp4_dsi_cmd_wait4dmap(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
+	int retries = MAX_DMAP_TIMEOUTS;
+	static int timeout_occurred[MAX_CONTROLLER];
+	unsigned long flags;
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -511,12 +527,62 @@ static void mdp4_dsi_cmd_wait4dmap(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	wait_for_completion(&vctrl->dmap_comp);
+	while (retries > 0) {
+		if (!wait_for_completion_timeout(&vctrl->dmap_comp,
+						DMAP_TIMEOUT)) {
+			pr_err("%s: TIMEOUT (retries left: %d)\n", __func__,
+				retries);
+			timeout_occurred[cndx] = 1;
+			/* only dump the hang once */
+			if (retries == MAX_DMAP_TIMEOUTS)
+				mdp4_hang_dump(__func__);
+		} else {
+			if (timeout_occurred[cndx] > 0)
+				pr_info("%s: recovered from previous timeout\n",
+					__func__);
+			timeout_occurred[cndx] = 0;
+
+			if (mdp4_dmap_timeout_counter[cndx] > 0) {
+				pr_info("%s: successful dmap wait after a "
+					"failure\n", __func__);
+				mdp4_dmap_timeout_counter[cndx] = 0;
+			}
+
+			break;
+		}
+		retries--;
+	}
+
+	if (retries == 0) {
+		mdp4_dmap_timeout_counter[cndx]++;
+		if (mdp4_dmap_timeout_counter[cndx] >= DMAP_TIMEOUT_BUG_COUNT) {
+			pr_err("%s: Reached maximum number of dmap timeouts, "
+				"bugging out", __func__);
+			BUG();
+		}
+
+		pr_warning("%s: Attempting to recover from dmap timeout "
+			"[%u total timeouts]", __func__,
+			mdp4_dmap_timeout_counter[cndx]);
+
+		spin_lock_irqsave(&vctrl->spin_lock, flags);
+		vctrl->dmap_done++;
+		pr_warning("%s: Incrementing dmap_done to %u", __func__,
+			vctrl->dmap_done);
+
+		if (vctrl->pan_display) {
+			vctrl->pan_display--;
+			pr_warning("%s: Decrementing pan_display to %u",
+				__func__, vctrl->pan_display);
+		}
+		spin_unlock_irqrestore(&vctrl->spin_lock, flags);
+	}
 }
 
 static void mdp4_dsi_cmd_wait4ov(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
+	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -528,9 +594,17 @@ static void mdp4_dsi_cmd_wait4ov(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	wait_for_completion(&vctrl->ov_comp);
+	if (!wait_for_completion_timeout(&vctrl->ov_comp, WAIT_TOUT)) {
+		pr_err("%s: TIMEOUT\n", __func__);
+		timeout_occurred[cndx] = 1;
+		mdp4_hang_dump(__func__);
+	} else {
+		if (timeout_occurred[cndx])
+			pr_info("%s: recovered from previous timeout\n",
+				__func__);
+		timeout_occurred[cndx] = 0;
+	}
 }
-
 /*
  * primary_rdptr_isr:
  * called from interrupt context
@@ -539,8 +613,6 @@ static void mdp4_dsi_cmd_wait4ov(int cndx)
 static void primary_rdptr_isr(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
-	u32 cur_vsync_ms;
-	int vsync_diff;
 
 	vctrl = &vsync_ctrl_db[cndx];
 	pr_debug("%s: ISR, tick=%d pan=%d cpu=%d\n", __func__,
@@ -549,17 +621,15 @@ static void primary_rdptr_isr(int cndx)
 
 	spin_lock(&vctrl->spin_lock);
 	vctrl->vsync_time = ktime_get();
-	cur_vsync_ms =  ktime_to_ms(vctrl->vsync_time);
-	vsync_diff = (int)(cur_vsync_ms - vctrl->last_vsync_ms);
 
-	if ((vsync_diff >= 0) && (vsync_diff < VSYNC_MIN_DIFF_MS)) {
+	if (vctrl->new_update) {
+		vctrl->new_update = 0;
 		spin_unlock(&vctrl->spin_lock);
 		return;
 	}
 
-	vctrl->last_vsync_ms = cur_vsync_ms;
-	complete_all(&vctrl->vsync_comp);
-	vctrl->wait_vsync_cnt = 0;
+	complete(&vctrl->vsync_comp);
+	complete(&vctrl->show_event_comp);
 
 	if (vctrl->expire_tick) {
 		vctrl->expire_tick--;
@@ -588,6 +658,18 @@ void mdp4_dmap_done_dsi_cmd(int cndx)
 	 /* blt enabled */
 	spin_lock(&vctrl->spin_lock);
 	vsync_irq_disable(INTR_DMA_P_DONE, MDP_DMAP_TERM);
+	if (vctrl->dmap_done >= vctrl->dmap_koff) {
+		if (mdp4_dmap_timeout_counter[cndx] > 0)
+			pr_warning("%s: received dmap interrupt after a "
+				"timeout and recovery!\n", __func__);
+		else
+			pr_err("%s: dmap_done/koff counters in unexpected "
+				"state!\n", __func__);
+		pr_warning("%s: dmap_done: [%u] dmap_koff: [%u]\n", __func__,
+			vctrl->dmap_done, vctrl->dmap_koff);
+		spin_unlock(&vctrl->spin_lock);
+		return;
+	}
 	vctrl->dmap_done++;
 
 	if (vctrl->pan_display)
@@ -697,6 +779,9 @@ ssize_t mdp4_dsi_cmd_show_event(struct device *dev,
 	ssize_t ret = 0;
 	unsigned long flags;
 	u64 vsync_tick;
+	static int timeout_occurred;
+	uint32 prev_rdptr_intr;
+	int retries = 2;
 
 	cndx = 0;
 	vctrl = &vsync_ctrl_db[0];
@@ -705,16 +790,39 @@ ssize_t mdp4_dsi_cmd_show_event(struct device *dev,
 		return 0;
 
 	spin_lock_irqsave(&vctrl->spin_lock, flags);
-	if (vctrl->wait_vsync_cnt == 0)
-		INIT_COMPLETION(vctrl->vsync_comp);
-	vctrl->wait_vsync_cnt++;
+	INIT_COMPLETION(vctrl->show_event_comp);
 	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 
-	ret = wait_for_completion_interruptible_timeout(&vctrl->vsync_comp,
-		msecs_to_jiffies(VSYNC_PERIOD * 4));
-	if (ret <= 0) {
-		vctrl->wait_vsync_cnt = 0;
-		vctrl->vsync_time = ktime_get();
+	while (retries-- > 0) {
+		prev_rdptr_intr = vctrl->rdptr_intr_tot;
+		ret = wait_for_completion_interruptible_timeout(
+			&vctrl->show_event_comp,
+			msecs_to_jiffies(VSYNC_PERIOD * 4));
+		if (ret == -ERESTARTSYS) {
+			pr_warning("%s: is interrupted\n", __func__);
+			return ret;
+		} else if (ret <= 0) {
+			if (!dsi_panel_on && retries) {
+				pr_warning("%s: TIMEOUT with panel off, "
+					"retrying", __func__);
+				continue;
+			} else
+				vctrl->vsync_time = ktime_get();
+		} else {
+			if (timeout_occurred)
+				pr_info("%s: recovered from previous timeout\n",
+					__func__);
+			timeout_occurred = 0;
+		}
+		break;
+	}
+
+	if (ret == 0) {
+		pr_err("%s: TIMEOUT (rdptr_intr: prev: %u "
+			"cur: %u)\n", __func__, prev_rdptr_intr,
+			vctrl->rdptr_intr_tot);
+		timeout_occurred = 1;
+		mdp4_hang_dump(__func__);
 	}
 
 	spin_lock_irqsave(&vctrl->spin_lock, flags);
@@ -745,6 +853,7 @@ void mdp4_dsi_rdptr_init(int cndx)
 	init_completion(&vctrl->ov_comp);
 	init_completion(&vctrl->dmap_comp);
 	init_completion(&vctrl->vsync_comp);
+	init_completion(&vctrl->show_event_comp);
 	spin_lock_init(&vctrl->spin_lock);
 	atomic_set(&vctrl->suspend, 1);
 	INIT_WORK(&vctrl->clk_work, clk_ctrl_work);
@@ -780,6 +889,7 @@ void mdp4_mipi_vsync_enable(struct msm_fb_data_type *mfd,
 	mdp_clk_ctrl(1);
 	if ((mfd->use_mdp_vsync) && (mfd->ibuf.vsync_enable) &&
 		(mfd->panel_info.lcd.vsync_enable)) {
+		u32 temp;
 
 		if (vsync_start_y_adjust <= pipe->dst_y)
 			start_y = pipe->dst_y - vsync_start_y_adjust;
@@ -790,6 +900,10 @@ void mdp4_mipi_vsync_enable(struct msm_fb_data_type *mfd,
 			MDP_OUTP(MDP_BASE + 0x210, start_y);	/* primary */
 		else
 			MDP_OUTP(MDP_BASE + 0x214, start_y);	/* secondary */
+
+		temp = inpdw(MDP_BASE + 0x100);
+		temp |= (0x7ff << MDP_SYNCFG_HGT_LOC);
+		MDP_OUTP(MDP_BASE + 0x100, temp);
 
 		data = inpdw(MDP_BASE + 0x20c);
 		data |= tear_en;
@@ -918,7 +1032,7 @@ static void mdp4_overlay_update_dsi_cmd(struct msm_fb_data_type *mfd)
 	/* TE enabled */
 	mdp4_mipi_vsync_enable(mfd, pipe, 0);
 
-	MDP_OUTP(MDP_BASE + 0x021c, 10); /* read pointer */
+	MDP_OUTP(MDP_BASE + 0x021c, mfd->fbi->var.yres + 1); /* read pointer */
 
 	/*
 	 * configure dsi stream id
@@ -1051,7 +1165,6 @@ int mdp4_dsi_cmd_on(struct platform_device *pdev)
 	pr_debug("%s+: pid=%d\n", __func__, current->pid);
 
 	mfd = (struct msm_fb_data_type *)platform_get_drvdata(pdev);
-	mfd->cont_splash_done = 1;
 
 	mutex_lock(&mfd->dma->ov_mutex);
 
@@ -1101,10 +1214,14 @@ int mdp4_dsi_cmd_off(struct platform_device *pdev)
 		return ret;
 	}
 
+	/* switch dsi_panel_on flag for cmd panel */
+	mdp4_dsi_panel_off(mfd);
+
 	need_wait = 0;
 	mutex_lock(&vctrl->update_lock);
 
-	complete_all(&vctrl->vsync_comp);
+	complete(&vctrl->vsync_comp);
+	complete(&vctrl->show_event_comp);
 
 	pr_debug("%s: clk=%d pan=%d\n", __func__,
 			vctrl->clk_enabled, vctrl->pan_display);
@@ -1236,7 +1353,57 @@ void mdp4_dsi_cmd_overlay(struct msm_fb_data_type *mfd)
 
 	mdp4_overlay_mdp_perf_upd(mfd, 1);
 	mdp4_dsi_cmd_pipe_commit(cndx, 0);
+	mdp4_dsi_panel_on(mfd);
 	mdp4_overlay_mdp_perf_upd(mfd, 0);
 	mutex_unlock(&mfd->dma->ov_mutex);
+}
 
+void mdp4_dsi_panel_on(struct msm_fb_data_type *mfd)
+{
+	struct msm_fb_panel_data *pdata =
+		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+
+	if (dsi_panel_on == false) {
+		if (pdata->panel_on)
+			pdata->panel_on(mfd->pdev);
+
+		dsi_panel_on = true;
+	}
+}
+
+void mdp4_dsi_panel_off(struct msm_fb_data_type *mfd)
+{
+	struct msm_fb_panel_data *pdata =
+		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+
+	if (dsi_panel_on == true) {
+		if (pdata->panel_off)
+			pdata->panel_off(mfd->pdev);
+
+		dsi_panel_on = false;
+	}
+}
+
+void mdp4_dump_vsync_ctrl(void)
+{
+	int cndx = 0;
+	struct vsycn_ctrl *vctrl;
+	unsigned long flags;
+
+	vctrl = &vsync_ctrl_db[cndx];
+
+	spin_lock_irqsave(&vctrl->spin_lock, flags);
+	MDP4_HANG_LOG("vctrl->clk_enabled = %d\n", vctrl->clk_enabled);
+	MDP4_HANG_LOG("vctrl->clk_control = %d\n", vctrl->clk_control);
+	MDP4_HANG_LOG("vctrl->expire_tick = %d\n", vctrl->expire_tick);
+	MDP4_HANG_LOG("vctrl->ov_koff = %d\n", vctrl->ov_koff);
+	MDP4_HANG_LOG("vctrl->ov_done = %d\n", vctrl->ov_done);
+	MDP4_HANG_LOG("vctrl->dmap_koff = %d\n", vctrl->dmap_koff);
+	MDP4_HANG_LOG("vctrl->dmap_done = %d\n", vctrl->dmap_done);
+	MDP4_HANG_LOG("vctrl->blt_change = %d\n", vctrl->blt_change);
+	MDP4_HANG_LOG("vctrl->blt_free = %d\n", vctrl->blt_free);
+	MDP4_HANG_LOG("vctrl->blt_end = %d\n", vctrl->blt_end);
+	MDP4_HANG_LOG("vctrl->blt_wait = %d\n", vctrl->blt_wait);
+	MDP4_HANG_LOG("mdp_intr_mask = 0x%08x\n", mdp_intr_mask);
+	spin_unlock_irqrestore(&vctrl->spin_lock, flags);
 }

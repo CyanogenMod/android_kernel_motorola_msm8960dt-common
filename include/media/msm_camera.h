@@ -1017,8 +1017,14 @@ struct msm_snapshot_pp_status {
 #define CFG_GPIO_OP                   54
 #define CFG_SET_VISION_MODE           55
 #define CFG_SET_VISION_AE             56
-#define CFG_HDR_UPDATE                57
-#define CFG_MAX                       58
+#define CFG_GET_MODULE_INFO           57
+#define CFG_SET_LENS_MODE             58
+#define CFG_GET_CUR_LENS_POS          59
+#define CFG_DIRECT_I2C_WRITE          60
+#define CFG_DIRECT_I2C_READ           61
+#define CFG_HDR_UPDATE                62
+#define CFG_SET_STROBE                63
+#define CFG_MAX                       64
 
 #define MOVE_NEAR	0
 #define MOVE_FAR	1
@@ -1558,6 +1564,13 @@ struct ispif_cfg_data {
 	} cfg;
 };
 
+struct otp_info_t {
+	uint8_t *otp_info;
+	uint16_t size;
+	uint8_t hw_rev;
+	uint8_t asic_rev;
+};
+
 enum msm_camera_i2c_reg_addr_type {
 	MSM_CAMERA_I2C_BYTE_ADDR = 1,
 	MSM_CAMERA_I2C_WORD_ADDR,
@@ -1677,6 +1690,8 @@ struct sensor_cfg_data {
 		void *setting;
 		int32_t vision_mode_enable;
 		int32_t vision_ae;
+		struct otp_info_t module_info;
+		uint8_t enable_strobe;
 	} cfg;
 };
 
@@ -1720,6 +1735,7 @@ enum msm_actuator_addr_type {
 enum msm_actuator_write_type {
 	MSM_ACTUATOR_WRITE_HW_DAMP,
 	MSM_ACTUATOR_WRITE_DAC,
+	MSM_ACTUATOR_WRITE_DAC_DW9735,
 };
 
 struct msm_actuator_reg_params_t {
@@ -1749,6 +1765,25 @@ struct msm_actuator_move_params_t {
 	int16_t dest_step_pos;
 	int32_t num_steps;
 	struct damping_params_t *ringing_params;
+};
+
+struct msm_actuator_i2c {
+	uint16_t addr;
+	uint16_t value;
+	uint32_t wait_time;
+};
+
+struct msm_focus_window_t {
+	uint16_t x;
+	uint16_t y;
+	uint16_t width;
+	uint16_t height;
+};
+
+#define MSM_ACTUATOR_I2C_MAX_TABLE_SIZE (8)
+struct msm_actuator_i2c_table {
+	struct msm_actuator_i2c data[MSM_ACTUATOR_I2C_MAX_TABLE_SIZE];
+	uint32_t size;
 };
 
 struct msm_actuator_tuning_params_t {
@@ -1801,6 +1836,8 @@ enum af_camera_name {
 	ACTUATOR_WEB_CAM_0,
 	ACTUATOR_WEB_CAM_1,
 	ACTUATOR_WEB_CAM_2,
+	ACTUATOR_MAIN_DW9714,
+	ACTUATOR_MAIN_DW9735,
 };
 
 struct msm_actuator_cfg_data {
@@ -1811,6 +1848,9 @@ struct msm_actuator_cfg_data {
 		struct msm_actuator_set_info_t set_info;
 		struct msm_actuator_get_info_t get_info;
 		enum af_camera_name cam_name;
+		uint8_t lens_mode;
+		int16_t cur_lens_pos;
+		struct msm_actuator_i2c_table i2c_table;
 	} cfg;
 };
 

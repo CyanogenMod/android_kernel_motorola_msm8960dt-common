@@ -17,11 +17,18 @@
 #include <linux/mfd/pm8xxx/pm8921.h>
 #include <linux/i2c.h>
 #include <linux/i2c/sx150x.h>
+#include <mach/board.h>
 #include <mach/irqs.h>
 #include <mach/rpm-regulator.h>
 #include <mach/msm_memtypes.h>
 #include <mach/msm_rtb.h>
 #include <mach/msm_cache_dump.h>
+#include "clock.h"
+#ifdef CONFIG_USB_MSM_OTG_72K
+#include <mach/msm_hsusb.h>
+#else
+#include <linux/usb/msm_hsusb.h>
+#endif
 
 /* Macros assume PMIC GPIOs and MPPs start at 1 */
 #define PM8921_GPIO_BASE		NR_GPIO_IRQS
@@ -42,6 +49,10 @@ extern int msm_pm8921_regulator_pdata_len __devinitdata;
 
 extern struct gpio_regulator_platform_data
 	msm_gpio_regulator_pdata[] __devinitdata;
+extern int msm_gpio_regulator_pdata_len;
+
+extern struct rpm_regulator_init_data msm_rpm_regulator_init_data[];
+extern int msm_rpm_regulator_init_data_len;
 
 extern struct regulator_init_data msm_saw_regulator_pdata_s5;
 extern struct regulator_init_data msm_saw_regulator_pdata_s6;
@@ -93,4 +104,33 @@ void msm8960_mdp_writeback(struct memtype_reserve *reserve_table);
 extern struct msm_rtb_platform_data msm8960_rtb_pdata;
 extern struct msm_cache_dump_platform_data msm8960_cache_dump_pdata;
 extern void msm8960_add_vidc_device(void);
+
+/* Exported functions for OEM machine types */
+void msm8960_reserve(void);
+void msm8960_early_memory(void);
+void msm8960_allocate_memory_regions(void);
+void msm8960_map_io(void);
+void msm8960_init_irq(void);
+void msm8960_cdp_init(void);
+
+struct msm8960_oem_init_ptrs {
+	void (*msm_gpio_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_cam_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_gsbi_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_gpio_mpp_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_i2c_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_pmic_init)(struct msm8960_oem_init_ptrs *, void *);
+	void (*msm_clock_init)(struct msm8960_oem_init_ptrs *,
+			       struct clock_init_data *);
+	void (*msm_device_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_display_init)(struct msm8960_oem_init_ptrs *,
+				struct msm_fb_platform_data *msm_fb_pdata,
+				struct mipi_dsi_platform_data *mipi_dsi_pdata);
+	void (*msm_regulator_init)(struct msm8960_oem_init_ptrs *);
+	void (*msm_otg_init)(struct msm8960_oem_init_ptrs *, void *);
+	void (*msm_mmc_init)(struct msm8960_oem_init_ptrs *, int, void*, int*);
+	void *oem_data;
+};
+extern struct msm8960_oem_init_ptrs msm8960_oem_funcs;
+
 #endif

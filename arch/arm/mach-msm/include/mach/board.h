@@ -236,6 +236,8 @@ enum msm_camera_actuator_name {
 	MSM_ACTUATOR_WEB_CAM_0,
 	MSM_ACTUATOR_WEB_CAM_1,
 	MSM_ACTUATOR_WEB_CAM_2,
+	MSM_ACTUATOR_MAIN_DW9714,
+	MSM_ACTUATOR_MAIN_DW9735,
 };
 
 struct msm_actuator_info {
@@ -252,6 +254,17 @@ struct msm_eeprom_info {
 	int eeprom_reg_addr;
 	int eeprom_read_length;
 	int eeprom_i2c_slave_addr;
+};
+
+struct oem_camera_sensor_data {
+	int sensor_dig_en;
+	int sensor_avdd_en;
+	int sensor_using_separate_dvdd;
+	int sensor_vdig_on_always;
+	int sensor_using_shared_mipi;
+	int sensor_allow_asic_bypass;
+	int sensor_asic_revision;
+	int sensor_using_new_pk_dvdd;
 };
 
 struct msm_camera_sensor_info {
@@ -276,6 +289,7 @@ struct msm_camera_sensor_info {
 	struct msm_actuator_info *actuator_info;
 	int pmic_gpio_enable;
 	struct msm_eeprom_info *eeprom_info;
+	struct oem_camera_sensor_data *oem_data;
 };
 
 struct msm_camera_board_info {
@@ -429,12 +443,23 @@ struct mddi_platform_data {
 	int (*mddi_client_power)(u32 client_id);
 };
 
+enum msm_disp_power_mode {
+	MSM_DISP_POWER_OFF = 0,
+	MSM_DISP_POWER_ON,
+	MSM_DISP_POWER_OFF_PARTIAL,
+	MSM_DISP_POWER_ON_PARTIAL,
+};
+
 struct mipi_dsi_platform_data {
 	int vsync_gpio;
 	int (*dsi_power_save)(int on);
+	int (*panel_power_save)(int on);
+	int (*panel_power_en)(int on);
+	int (*panel_power_force_off)(int on);
 	int (*dsi_client_reset)(void);
 	int (*get_lane_config)(void);
 	char (*splash_is_enabled)(void);
+	void (*disable_splash)(void);
 	int target_type;
 };
 
@@ -461,6 +486,7 @@ struct mipi_dsi_panel_platform_data {
 	void (*dsi_pwm_cfg)(void);
 	char enable_wled_bl_ctrl;
 	void (*gpio_set_backlight)(int bl_level);
+	int (*get_dsi_clk_rate)(void);
 };
 
 struct lvds_panel_platform_data {
@@ -479,6 +505,7 @@ struct msm_fb_platform_data {
 	int (*allow_set_offset)(void);
 	char prim_panel_name[PANEL_NAME_MAX_LEN];
 	char ext_panel_name[PANEL_NAME_MAX_LEN];
+	bool (*is_partial_mode_supported)(void);
 };
 
 struct msm_hdmi_platform_data {

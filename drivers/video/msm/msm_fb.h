@@ -111,6 +111,8 @@ struct msm_fb_data_type {
 	struct hrtimer dma_hrtimer;
 
 	boolean panel_power_on;
+	struct msmfb_suspend_cfg suspend_cfg;
+	struct msmfb_resume_cfg resume_cfg;
 	struct work_struct dma_update_worker;
 	struct semaphore sem;
 
@@ -143,6 +145,10 @@ struct msm_fb_data_type {
 	void (*update_panel_info)(struct msm_fb_data_type *mfd);
 	bool (*is_panel_ready)(void);
 	void *vsync_show;
+	int (*reg_read)(struct msm_fb_data_type *mfd, __u16 address,
+				__u16 size, __u8 *buf, __u8 use_hs_mode);
+	int (*reg_write)(struct msm_fb_data_type *mfd, __u16 size,
+				__u8 *buf, __u8 use_hs_mode);
 	void *cursor_buf;
 	void *cursor_buf_phys;
 
@@ -217,6 +223,7 @@ struct msm_fb_data_type {
 	unsigned char *copy_splash_phys;
 	uint32 sec_mapped;
 	uint32 sec_active;
+	bool (*is_partial_mode_supported)(void);
 };
 struct msm_fb_backup_type {
 	struct fb_info info;

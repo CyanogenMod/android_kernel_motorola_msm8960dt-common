@@ -2305,8 +2305,8 @@ static int nl80211_stop_ap(struct sk_buff *skb, struct genl_info *info)
 		return -ENOENT;
 
 	err = rdev->ops->stop_ap(&rdev->wiphy, dev);
-	if (!err)
-		wdev->beacon_interval = 0;
+	wdev->beacon_interval = 0;
+
 	return err;
 }
 
@@ -8273,6 +8273,16 @@ void cfg80211_tdls_oper_request(struct net_device *dev, const u8 *peer,
 	nlmsg_free(msg);
 }
 EXPORT_SYMBOL(cfg80211_tdls_oper_request);
+
+void cfg80211_send_iface_unavailable(struct net_device *netdev, gfp_t gfp)
+{
+	struct wireless_dev *wdev = netdev->ieee80211_ptr;
+	struct cfg80211_registered_device *rdev = wiphy_to_dev(wdev->wiphy);
+
+	nl80211_send_mlme_event(rdev, netdev, NULL, 0,
+				NL80211_CMD_INTERFACE_UNAVAILABLE, gfp);
+}
+EXPORT_SYMBOL(cfg80211_send_iface_unavailable);
 
 static int nl80211_netlink_notify(struct notifier_block * nb,
 				  unsigned long state,

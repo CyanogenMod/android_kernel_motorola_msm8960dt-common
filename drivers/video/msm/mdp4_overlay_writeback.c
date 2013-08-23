@@ -108,11 +108,15 @@ int mdp4_overlay_writeback_on(struct platform_device *pdev)
 
 	mfd = (struct msm_fb_data_type *)platform_get_drvdata(pdev);
 
-	if (!mfd)
+	if (!mfd) {
+		pr_err("%s: !mfd\n", __func__);
 		return -ENODEV;
+	}
 
-	if (mfd->key != MFD_KEY)
+	if (mfd->key != MFD_KEY) {
+		pr_err("%s: mfd->key != MFD_KEY\n", __func__);
 		return -EINVAL;
+	}
 
 	vctrl = &vsync_ctrl_db[cndx];
 	vctrl->mfd = mfd;
@@ -474,6 +478,7 @@ void mdp4_wfd_init(int cndx)
 static void mdp4_wfd_wait4ov(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
+	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -485,7 +490,16 @@ static void mdp4_wfd_wait4ov(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	wait_for_completion(&vctrl->ov_comp);
+	if (!wait_for_completion_timeout(&vctrl->ov_comp, HZ)) {
+		pr_err("%s: TIMEOUT\n", __func__);
+		timeout_occurred[cndx] = 1;
+		mdp4_hang_dump(__func__);
+	} else {
+		if (timeout_occurred[cndx])
+			pr_info("%s: recovered from previous timeout\n",
+				__func__);
+		timeout_occurred[cndx] = 0;
+	}
 }
 
 
