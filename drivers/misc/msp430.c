@@ -574,7 +574,7 @@ static int msp430_reset_and_init(void)
 {
 	struct msp430_platform_data *pdata;
 	struct timespec current_time;
-	int msp_req_gpio;
+	int msp_req_gpio = 0;
 	int msp_req_value;
 	unsigned int i;
 	int err, ret_err = 0;

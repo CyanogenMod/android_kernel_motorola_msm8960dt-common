@@ -138,7 +138,7 @@ void mipi_mot_exit_sleep_wait()
 
 int mipi_mot_panel_on(struct msm_fb_data_type *mfd)
 {
-	u8 pwr_mode;
+	u8 pwr_mode = 0;
 	int ret = 0;
 	u8 attempts = 1;
 	u8 failures = 0;
@@ -345,7 +345,7 @@ int mipi_mot_get_pwr_mode(struct msm_fb_data_type *mfd, u8 *pwr_mode)
 u16 mipi_mot_get_manufacture_id(struct msm_fb_data_type *mfd)
 {
 	static int manufacture_id = INVALID_VALUE;
-	u8 rdata;
+	u8 rdata = 0;
 	int ret;
 
 	if (manufacture_id == INVALID_VALUE) {
@@ -365,7 +365,7 @@ u16 mipi_mot_get_manufacture_id(struct msm_fb_data_type *mfd)
 u16 mipi_mot_get_controller_ver(struct msm_fb_data_type *mfd)
 {
 	static int controller_ver = INVALID_VALUE;
-	u8 rdata;
+	u8 rdata = 0;
 	int ret;
 
 	if (controller_ver == INVALID_VALUE) {
@@ -408,7 +408,7 @@ int mipi_mot_is_valid_power_mode(struct msm_fb_data_type *mfd)
 u16 mipi_mot_get_controller_drv_ver(struct msm_fb_data_type *mfd)
 {
 	static int controller_drv_ver = INVALID_VALUE;
-	u8 rdata;
+	u8 rdata = 0;
 	int ret;
 
 	if (controller_drv_ver == INVALID_VALUE) {
