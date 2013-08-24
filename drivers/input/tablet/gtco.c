@@ -226,6 +226,8 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 	char  globtype[12];
 	int   indent = 0;
 	char  indentstr[10] = "";
+	oldval[1] = 0;
+	oldval[2] = 0;
 
 
 	dbg("======>>>>>>PARSE<<<<<<======");
