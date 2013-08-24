@@ -860,6 +860,12 @@ config MACH_MSM8960_MMI
 	help
 	  Support for Motorola Mobility MSM8960 devices.
 
+config MACH_MSM8960_MMI_SKIP_ATAG_DEVTREE
+	depends on MACH_MSM8960_MMI
+	bool "MSM8960 MMI SKIP ATAG DEVTREE"
+	help
+	  Skip bootloader passed ATAG for devtree (hopefully using appended DTB instead).
+
 config MSM_USE_TSIF1
 	depends on ARCH_MSM8X60
 	bool "MSM8x60 use TSIF1"
