@@ -102,6 +102,7 @@ struct mmi_disp_reg_lst {
 #define RADIO_ID_MAX	6
 
 struct mmi_disp_data {
+	char *name;
 	enum mmi_disp_intf_type disp_intf;
 	int num_disp_reset;
 	struct mmi_disp_gpio_config disp_gpio[DISP_MAX_RESET];
@@ -138,6 +139,94 @@ static struct mmi_disp_reg_lst dsi_regs_lst = {
 		.en_gpio = {
 			.num = -1,
 		},
+	},
+};
+
+#define MAX_DISPLAYS	10
+
+static struct mmi_disp_data mmi_disp_info_list[MAX_DISPLAYS] = {
+	{
+		.name = "mipi_mot_video_smd_hd_465",
+		.disp_intf = MMI_DISP_MIPI_DSI_VM,
+		.num_disp_reset = 1,
+		.disp_gpio[0] = {
+			.num = 37,
+			.type = MMI_DISP_PM_GPIO,
+			.init_val = 1,
+			.en_val = 1,
+			.en_pre_delay = 15,
+			.en_post_delay = 15,
+			.dis_post_delay = 10,
+		},
+		.mipi_mux_select = {
+			.gpio_name = "mipi_d0_sel",
+			.num = 10,
+			.type = MMI_DISP_PM_GPIO,
+			.init_val = 0,
+			.en_val = 0,
+			.en_pre_delay = 0,
+			.en_post_delay = 0,
+			.dis_pre_delay = 0,
+			.dis_post_delay = 0,
+		},
+		.reg_lst = {
+			.num_disp_regs = 3,
+			.disp_reg[0] = {
+				.reg_id = "",
+				.reg_name = "VBATT_DISP_CONN",
+				.en_gpio = {
+					.gpio_name = "DISP_V1_EN",
+					.num = 13,
+					.type = MMI_DISP_MSM_GPIO,
+					.init_val = 1,
+					.en_val = 1,
+					.en_pre_delay = 0,
+					.en_post_delay = 1,
+					.dis_pre_delay = 0,
+					.dis_post_delay = 0,
+				},
+			},
+                        /* Display's VDDIO reg */
+			.disp_reg[1] = {
+				.reg_id = "dsi_s4",
+				.reg_name = "VDD_DISP_CONN",
+				.min_uV = 1800000,
+				.max_uV = 1800000,
+				.en_gpio = {
+					.gpio_name = "DISP_V2_EN",
+					.num = 12,
+					.type = MMI_DISP_MSM_GPIO,
+					.init_val = 1,
+					.en_val = 1,
+					.en_pre_delay = 0,
+					.en_post_delay = 0,
+					.dis_pre_delay = 0,
+					.dis_post_delay = 0,
+				}
+			},
+                        /* Display's VCI reg */
+			.disp_reg[2] = {
+				.reg_id = "disp_vci",
+				.reg_name = "VCI_DISP_CONN",
+				.min_uV = 3100000,
+				.max_uV = 3100000,
+				.en_gpio = {
+					.gpio_name = "DISP_V3_EN",
+					.num = 90,
+					.type = MMI_DISP_MSM_GPIO,
+					.init_val = 1,
+					.en_val = 1,
+					.en_pre_delay = 0,
+					.en_post_delay = 0,
+					.dis_pre_delay = 0,
+					.dis_post_delay = 0,
+				}
+			},
+		},
+		.partial_mode_supported = true,
+	},
+	{
+		.name = NULL,
 	},
 };
 
@@ -494,6 +583,8 @@ end:
 static void __init mmi_load_panel_from_dt(void)
 {
 	struct device_node *node;
+	int i;
+	int found_index = -1;
 
 	if (!strlen(panel_name)) {
 		pr_debug("%s: No UTAG for panel name, search in devtree\n",
@@ -504,8 +595,35 @@ static void __init mmi_load_panel_from_dt(void)
 							__func__, panel_name);
 
 	node = search_panel_from_dt();
-	if (!node)
+	if (!node) {
+		// Lookup the panel name in our secondary data table
+		i = 0;
+		pr_info(">>> i = %d\n", i);
+		while ((mmi_disp_info_list[i].name != NULL) && (found_index == -1)) {
+			if (!strncmp(panel_name, mmi_disp_info_list[i].name, strlen(panel_name))) {
+				pr_info(">>> PANEL EXTRA DATA FOUND!!! [%s]\n", panel_name);
+				found_index = i;
+			}
+			i++;
+		}
+		pr_info(">>> found_index = %d\n", found_index);
+		if (found_index == -1) {
+			pr_info(">>> PANEL EXTRA DATA NOT FOUND!!! [%s]\n", panel_name);
+			return;
+		}
+		memcpy(&mmi_disp_info, &mmi_disp_info_list[found_index], sizeof(mmi_disp_info));
+		pr_info("%s: partial_mode_supported %d\n", __func__,
+			mmi_disp_info.partial_mode_supported);
+
+		if (mmi_disp_info.partial_mode_supported) {
+			panel_gpio_init(&mmi_disp_info.mipi_mux_select);
+			if (gpio_export(mmi_disp_info.mipi_mux_select.handle, 0))
+				pr_err("%s: failed to export mipi_d0_sel\n", __func__);
+		}
+
+		print_mmi_disp_data();
 		return;
+	}
 	if (of_property_read_u32(node, "disp_intf", &mmi_disp_info.disp_intf))
 		pr_err("%s: no panel interface setting. disp_intf=%d\n",
 					__func__, mmi_disp_info.disp_intf);
