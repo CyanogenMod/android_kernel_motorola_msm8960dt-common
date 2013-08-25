@@ -689,7 +689,6 @@ static void __init mmi_msm8960_init_early(void)
 	msm8960_oem_funcs.oem_data = &mmi_data;
 }
 
-#ifndef CONFIG_MACH_MSM8960_MMI_SKIP_ATAG_DEVTREE
 static int __init parse_tag_flat_dev_tree_address(const struct tag *tag)
 {
 	struct tag_flat_dev_tree_address *fdt_addr =
@@ -706,7 +705,6 @@ static int __init parse_tag_flat_dev_tree_address(const struct tag *tag)
 	return 0;
 }
 __tagtable(ATAG_FLAT_DEV_TREE_ADDRESS, parse_tag_flat_dev_tree_address);
-#endif
 
 static const char *mmi_dt_match[] __initdata = {
 	"mmi,msm8960",
