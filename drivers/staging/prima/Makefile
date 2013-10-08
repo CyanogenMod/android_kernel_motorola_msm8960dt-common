@@ -580,6 +580,8 @@ ifeq ($(RE_ENABLE_WIFI_ON_WDI_TIMEOUT),1)
 CDEFINES += -DWDI_RE_ENABLE_WIFI_ON_WDI_TIMEOUT
 endif
 
+CDEFINES += -DWLAN_OPEN_SOURCE
+
 # Fix build for GCC 4.7
 EXTRA_CFLAGS += -Wno-maybe-uninitialized -Wno-unused-function
 
