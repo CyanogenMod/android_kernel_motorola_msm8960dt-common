@@ -256,7 +256,7 @@ int hdd_softap_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
       }
       else if (FALSE == pAdapter->aStaInfo[STAId].isUsed )
       {
-         VOS_TRACE( VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_WARN,"%s: STA is unregistered", __func__, STAId);
+         VOS_TRACE( VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_WARN,"%s: STA %d is unregistered", __func__, STAId);
          ++pAdapter->stats.tx_dropped;
          ++pAdapter->hdd_stats.hddTxRxStats.txXmitDropped;
          kfree_skb(skb);
@@ -411,7 +411,7 @@ VOS_STATUS hdd_softap_sta_2_sta_xmit(struct sk_buff *skb,
    if ( FALSE == pAdapter->aStaInfo[STAId].isUsed )
    {
       VOS_TRACE( VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_WARN,
-                 "%s: STA is unregistered", __func__, STAId );
+                 "%s: STA %d is unregistered", __func__, STAId );
       kfree_skb(skb);
       status = VOS_STATUS_E_FAILURE;
       goto xmit_end;
@@ -560,7 +560,9 @@ VOS_STATUS hdd_softap_init_tx_rx( hdd_adapter_t *pAdapter )
                            HDD_SOFTAP_VI_WEIGHT_DEFAULT, 
                            HDD_SOFTAP_VO_WEIGHT_DEFAULT
                          };
+
    hdd_context_t *pHddCtx = NULL;
+
    pAdapter->isVosOutOfResource = VOS_FALSE;
 
    vos_mem_zero(&pAdapter->stats, sizeof(struct net_device_stats));
@@ -629,7 +631,6 @@ VOS_STATUS hdd_softap_init_tx_rx( hdd_adapter_t *pAdapter )
 VOS_STATUS hdd_softap_deinit_tx_rx( hdd_adapter_t *pAdapter )
 {
    VOS_STATUS status = VOS_STATUS_SUCCESS;
-
    hdd_context_t *pHddCtx = NULL;
 
    pHddCtx = (hdd_context_t *)pAdapter->pHddCtx;
@@ -938,7 +939,8 @@ VOS_STATUS hdd_softap_tx_fetch_packet_cbk( v_VOID_t *vosContext,
       VOS_ASSERT(0);
       return VOS_STATUS_E_FAILURE;
    }
-    /* Monitor traffic */
+ 
+   /* Monitor traffic */
    if ( pHddCtx->cfg_ini->enableTrafficMonitor )
    {
       pHddCtx->traffic_monitor.lastFrameTs = vos_timer_get_system_time();
@@ -1253,7 +1255,7 @@ VOS_STATUS hdd_softap_rx_packet_cbk( v_VOID_t *vosContext,
       VOS_ASSERT(0);
       return VOS_STATUS_E_FAILURE;
    }
-   
+
    /* Monitor traffic */
    if ( pHddCtx->cfg_ini->enableTrafficMonitor )
    {
@@ -1394,11 +1396,25 @@ VOS_STATUS hdd_softap_rx_packet_cbk( v_VOID_t *vosContext,
 VOS_STATUS hdd_softap_DeregisterSTA( hdd_adapter_t *pAdapter, tANI_U8 staId )
 {
     VOS_STATUS vosStatus = VOS_STATUS_SUCCESS;
-    hdd_context_t *pHddCtx = pAdapter->pHddCtx;
+    hdd_context_t *pHddCtx;
+    if (NULL == pAdapter)
+    {
+        VOS_TRACE(VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_ERROR,
+                    "%s: pAdapter is NULL", __func__);
+        return VOS_STATUS_E_INVAL;
+    }
 
+    if (WLAN_HDD_ADAPTER_MAGIC != pAdapter->magic)
+    {
+        VOS_TRACE(VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_ERROR,
+                    "%s: Invalid pAdapter magic", __func__);
+        return VOS_STATUS_E_INVAL;
+    }
+
+    pHddCtx = (hdd_context_t*)(pAdapter->pHddCtx);
     //Clear station in TL and then update HDD data structures. This helps 
     //to block RX frames from other station to this station.
-    vosStatus = WLANTL_ClearSTAClient( (WLAN_HDD_GET_CTX(pAdapter))->pvosContext, staId );
+    vosStatus = WLANTL_ClearSTAClient( pHddCtx->pvosContext, staId );
     if ( !VOS_IS_STATUS_SUCCESS( vosStatus ) )
     {
         VOS_TRACE( VOS_MODULE_ID_HDD_SOFTAP, VOS_TRACE_LEVEL_ERROR, 
@@ -1680,3 +1696,18 @@ VOS_STATUS hdd_softap_GetStaId(hdd_adapter_t *pAdapter, v_MACADDR_t *pMacAddress
     return VOS_STATUS_E_FAILURE;
 }
 
+VOS_STATUS hdd_softap_GetConnectedStaId(hdd_adapter_t *pAdapter, v_U8_t *staId)
+{
+    v_U8_t i;
+
+    for (i = 0; i < WLAN_MAX_STA_COUNT; i++)
+    {
+        if (pAdapter->aStaInfo[i].isUsed)
+        {
+            *staId = i;
+            return VOS_STATUS_SUCCESS;
+        }
+    }
+
+    return VOS_STATUS_E_FAILURE;
+}

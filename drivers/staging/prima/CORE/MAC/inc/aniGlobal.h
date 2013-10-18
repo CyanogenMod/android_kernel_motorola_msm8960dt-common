@@ -150,6 +150,8 @@ typedef struct sAniSirGlobal *tpAniSirGlobal;
 
 #define SPACE_ASCII_VALUE  32
 
+#define SPACE_ASCII_VALUE  32
+
 // -------------------------------------------------------------------
 // Change channel generic scheme
 typedef void (*CHANGE_CHANNEL_CALLBACK)(tpAniSirGlobal pMac, eHalStatus status, tANI_U32 *data,
@@ -253,6 +255,11 @@ typedef struct sLimTimers
     TX_TIMER           gLimDeauthAckTimer;
     // This timer is started when single shot NOA insert msg is sent to FW for scan in P2P GO mode
     TX_TIMER           gLimP2pSingleShotNoaInsertTimer;
+    /* This timer is used to convert active channel to
+     * passive channel when there is no beacon
+     * for a period of time on a particular DFS channel
+     */
+    TX_TIMER           gLimActiveToPassiveChannelTimer;
 //********************TIMER SECTION ENDS**************************************************
 // ALL THE FIELDS BELOW THIS CAN BE ZEROED OUT in limInitialize
 //****************************************************************************************
@@ -330,6 +337,20 @@ typedef struct sAniSirLim
      */
     tLimScanResultNode
            *gLimCachedScanHashTable[LIM_MAX_NUM_OF_SCAN_RESULTS];
+
+    /// This indicates total length of 'matched' scan results
+    tANI_U16   gLimMlmLfrScanResultLength;
+
+    /// This indicates total length of 'cached' scan results
+    tANI_U16   gLimSmeLfrScanResultLength;
+
+    /**
+     * Hash table definition for storing LFR SCAN results
+     * This is the placed holder for roaming candidates as forwarded
+     * by FW
+     */
+    tLimScanResultNode
+        *gLimCachedLfrScanHashTable[LIM_MAX_NUM_OF_SCAN_RESULTS];
 
     /// Place holder for current channel ID
     /// being scanned during background scanning
@@ -895,6 +916,7 @@ tLimMlmOemDataRsp       *gpLimMlmOemDataRsp;
 #endif
     tLimDisassocDeauthCnfReq limDisassocDeauthCnfReq;
     tANI_U8 deferredMsgCnt;
+    tSirDFSChannelList    dfschannelList;
 } tAniSirLim, *tpAniSirLim;
 
 typedef struct sLimMgmtFrameRegistration

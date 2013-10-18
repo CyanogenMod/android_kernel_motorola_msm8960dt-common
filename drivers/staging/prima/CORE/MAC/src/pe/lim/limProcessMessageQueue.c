@@ -549,7 +549,34 @@ limHandle80211Frames(tpAniSirGlobal pMac, tpSirMsgQ limMsg, tANI_U8 *pDeferMsg)
     limLog( pMac, LOG4, FL("ProtVersion %d, Type %d, Subtype %d rateIndex=%d"),
             fc.protVer, fc.type, fc.subType, WDA_GET_RX_MAC_RATE_IDX(pRxPacketInfo));
    
-
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+    if ( WDA_GET_ROAMCANDIDATEIND(pRxPacketInfo))
+    {
+        limLog( pMac, LOG2, FL("Notify SME with candidate ind"));
+        //send a session 0 for now - TBD
+        limSendSmeCandidateFoundInd(pMac, 0);
+        goto end;
+    }
+    if (WDA_GET_OFFLOADSCANLEARN(pRxPacketInfo))
+    {
+        if (fc.subType == SIR_MAC_MGMT_BEACON)
+        {
+            limLog( pMac, LOG2, FL("Save this beacon in LFR cache"));
+            __limHandleBeacon(pMac, limMsg, NULL);
+        }
+        else if (fc.subType == SIR_MAC_MGMT_PROBE_RSP)
+        {
+            limLog( pMac, LOG2, FL("Save this probe rsp in LFR cache"));
+            limProcessProbeRspFrameNoSession(pMac, pRxPacketInfo);
+        }
+        else
+        {
+            limLog( pMac, LOGE, FL("Wrong frame Type %d, Subtype %d for LFR"),
+                    fc.type, fc.subType);
+        }
+        goto end;
+    }
+#endif //WLAN_FEATURE_ROAM_SCAN_OFFLOAD
 #ifdef FEATURE_WLAN_CCX
     if (fc.type == SIR_MAC_DATA_FRAME && isFrmFt) 
     {
@@ -808,6 +835,9 @@ limHandle80211Frames(tpAniSirGlobal pMac, tpSirMsgQ limMsg, tANI_U8 *pDeferMsg)
 
     } // switch (fc.type)
 
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+end:
+#endif
     limPktFree(pMac, HAL_TXRX_FRM_802_11_MGMT, pRxPacketInfo, (void *) limMsg->bodyptr) ;
     return;
 } /*** end limHandle80211Frames() ***/
@@ -1239,6 +1269,7 @@ limProcessMessages(tpAniSirGlobal pMac, tpSirMsgQ  limMsg)
         case eWNI_SME_DEL_STA_SELF_REQ:
         case eWNI_SME_REGISTER_MGMT_FRAME_REQ:
         case eWNI_SME_UPDATE_NOA:
+        case eWNI_SME_CLEAR_DFS_CHANNEL_LIST:
             // These messages are from HDD
             limProcessNormalHddMsg(pMac, limMsg, false);   //no need to response to hdd
             break;
@@ -1433,7 +1464,7 @@ limProcessMessages(tpAniSirGlobal pMac, tpSirMsgQ  limMsg)
             limProcessAddBaInd(pMac, limMsg);
             break;
         case SIR_LIM_DEL_BA_ALL_IND:
-            limDelAllBASessions(pMac);  // refer notes and change
+            limDelAllBASessions(pMac);
             break;
         case SIR_LIM_DEL_BA_IND:
             limProcessMlmHalBADeleteInd( pMac, limMsg );
@@ -1467,6 +1498,7 @@ limProcessMessages(tpAniSirGlobal pMac, tpSirMsgQ  limMsg)
         case SIR_LIM_INSERT_SINGLESHOT_NOA_TIMEOUT:
         case SIR_LIM_DISASSOC_ACK_TIMEOUT:
         case SIR_LIM_DEAUTH_ACK_TIMEOUT:
+        case SIR_LIM_CONVERT_ACTIVE_CHANNEL_TO_PASSIVE:
             // These timeout messages are handled by MLM sub module
 
             limProcessMlmReqMessages(pMac,

@@ -1907,6 +1907,10 @@ void limProcessStaMlmAddStaRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ ,tpPESess
 #ifdef WLAN_DEBUG
         pMac->lim.gLimNumLinkEsts++;
 #endif
+#ifdef FEATURE_WLAN_TDLS
+       /* initialize TDLS peer related data */
+       limInitTdlsData(pMac,psessionEntry);
+#endif
         // Return Assoc confirm to SME with success
         // FIXME_GEN4 - Need the correct ASSOC RSP code to
         // be passed in here....
@@ -1957,18 +1961,6 @@ void limProcessMlmDelBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ,tpPESession 
    {
       WDA_TrafficStatsTimerActivate(FALSE);
    }
-
-#ifdef WLAN_FEATURE_11W
-    if (psessionEntry->limRmfEnabled)
-    {
-        if ( eSIR_SUCCESS != limSendExcludeUnencryptInd(pMac, TRUE, psessionEntry) )
-        {
-            limLog( pMac, LOGE,
-                    FL( "Could not send down Exclude Unencrypted Indication!" ),
-                    psessionEntry->limMlmState );
-        }
-    }
-#endif
 }
 
 void limProcessStaMlmDelBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ,tpPESession psessionEntry)
@@ -3078,12 +3070,6 @@ limProcessStaMlmAddBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ,tpPESession ps
                 PELOGE(limLog(pMac, LOGE, FL("could not Add Self Entry for the station"));)
                 mlmAssocCnf.resultCode = (tSirResultCodes) eSIR_SME_REFUSED;
             }
-#ifdef FEATURE_WLAN_TDLS
-            else {
-               /* initialize TDLS peer related data */
-               limInitTdlsData(pMac,psessionEntry);
-            }
-#endif            
         }
     }
     else
@@ -3196,18 +3182,6 @@ void limProcessMlmAddBssRsp( tpAniSirGlobal pMac, tpSirMsgQ limMsgQ )
     {
        WDA_TrafficStatsTimerActivate(TRUE);
     }
-
-#ifdef WLAN_FEATURE_11W
-    if (psessionEntry->limRmfEnabled)
-    {
-        if ( eSIR_SUCCESS != limSendExcludeUnencryptInd(pMac, FALSE, psessionEntry) )
-        {
-            limLog( pMac, LOGE,
-                    FL( "Could not send down Exclude Unencrypted Indication!" ),
-                    psessionEntry->limMlmState );
-        }
-    }
-#endif
 }
 /**
  * limProcessMlmSetKeyRsp()

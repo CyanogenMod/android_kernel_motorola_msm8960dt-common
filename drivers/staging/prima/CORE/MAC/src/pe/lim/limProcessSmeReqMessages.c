@@ -121,7 +121,6 @@ void __limProcessSmeAssocCnfNew(tpAniSirGlobal, tANI_U32, tANI_U32 *);
 
 extern void peRegisterTLHandle(tpAniSirGlobal pMac);
 
-extern int limProcessRemainOnChnlReq(tpAniSirGlobal pMac, tANI_U32 *pMsg);
 
 #ifdef BACKGROUND_SCAN_ENABLED
 
@@ -384,6 +383,9 @@ __limProcessSmeStartReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
         /// By default return unique scan results
         pMac->lim.gLimReturnUniqueResults = true;
         pMac->lim.gLimSmeScanResultLength = 0;
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+        pMac->lim.gLimSmeLfrScanResultLength = 0;
+#endif
 
         if (((tSirSmeStartReq *) pMsgBuf)->sendNewBssInd)
         {
@@ -836,7 +838,7 @@ __limHandleSmeStartBssRequest(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
              *reserved reserved RIFS Lsig n-GF ht20 11g 11b*/
             palCopyMemory( pMac->hHdd, (void *) &psessionEntry->cfgProtection,
                           (void *) &pSmeStartBssReq->ht_capab,
-                          sizeof( tANI_U16 ));
+                          sizeof( tCfgProtection ));
             psessionEntry->pAPWPSPBCSession = NULL; // Initialize WPS PBC session link list
         }
 
@@ -1062,7 +1064,6 @@ void limGetRandomBssid(tpAniSirGlobal pMac, tANI_U8 *data)
      random[1] = random[0] >> 1;
      palCopyMemory(pMac->hHdd, data, (tANI_U8*)random, sizeof(tSirMacAddr));
 }
-
 
 /**
  * __limProcessSmeScanReq()
@@ -1326,24 +1327,58 @@ __limProcessSmeScanReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
             tANI_U16    scanRspLen = sizeof(tSirSmeScanRsp);
 
             pMac->lim.gLimRspReqd = false;
-
-            if (pMac->lim.gLimSmeScanResultLength == 0)
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+            if (pScanReq->returnFreshResults & SIR_BG_SCAN_RETURN_LFR_CACHED_RESULTS)
             {
-                limSendSmeScanRsp(pMac, scanRspLen, eSIR_SME_SUCCESS, pScanReq->sessionId, pScanReq->transactionId);
+                pMac->lim.gLimSmeLfrScanResultLength = pMac->lim.gLimMlmLfrScanResultLength;
+                if (pMac->lim.gLimSmeLfrScanResultLength == 0)
+                {
+                    limSendSmeLfrScanRsp(pMac, scanRspLen,
+                                         eSIR_SME_SUCCESS,
+                                         pScanReq->sessionId,
+                                         pScanReq->transactionId);
+                }
+                else
+                {
+                    scanRspLen = sizeof(tSirSmeScanRsp) +
+                                 pMac->lim.gLimSmeLfrScanResultLength -
+                                 sizeof(tSirBssDescription);
+                    limSendSmeLfrScanRsp(pMac, scanRspLen, eSIR_SME_SUCCESS,
+                               pScanReq->sessionId, pScanReq->transactionId);
+                }
             }
             else
             {
-                scanRspLen = sizeof(tSirSmeScanRsp) +
-                             pMac->lim.gLimSmeScanResultLength -
-                             sizeof(tSirBssDescription);
-                limSendSmeScanRsp(pMac, scanRspLen, eSIR_SME_SUCCESS, pScanReq->sessionId, pScanReq->transactionId);
+#endif
+               if (pMac->lim.gLimSmeScanResultLength == 0)
+               {
+                  limSendSmeScanRsp(pMac, scanRspLen, eSIR_SME_SUCCESS,
+                          pScanReq->sessionId, pScanReq->transactionId);
+               }
+               else
+               {
+                  scanRspLen = sizeof(tSirSmeScanRsp) +
+                               pMac->lim.gLimSmeScanResultLength -
+                               sizeof(tSirBssDescription);
+                  limSendSmeScanRsp(pMac, scanRspLen, eSIR_SME_SUCCESS,
+                                  pScanReq->sessionId, pScanReq->transactionId);
+               }
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
             }
+#endif
 
             if (pScanReq->returnFreshResults & SIR_BG_SCAN_PURGE_RESUTLS)
             {
                 // Discard previously cached scan results
                 limReInitScanResults(pMac);
             }
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+            if (pScanReq->returnFreshResults & SIR_BG_SCAN_PURGE_LFR_RESULTS)
+            {
+                // Discard previously cached scan results
+                limReInitLfrScanResults(pMac);
+            }
+#endif
 
         } // if (pMac->lim.gLimRspReqd)
     } // else ((pMac->lim.gLimSmeState == eLIM_SME_IDLE_STATE) || ...
@@ -1387,6 +1422,29 @@ static void __limProcessSmeOemDataReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
 
 #endif //FEATURE_OEM_DATA_SUPPORT
 
+/**
+ * __limProcessClearDfsChannelList()
+ *
+ *FUNCTION:
+ *Clear DFS channel list  when country is changed/aquired.
+.*This message is sent from SME.
+ *
+ *LOGIC:
+ *
+ *ASSUMPTIONS:
+ *
+ *NOTE:
+ *
+ * @param  pMac      Pointer to Global MAC structure
+ * @param  *pMsgBuf  A pointer to the SME message buffer
+ * @return None
+ */
+static void __limProcessClearDfsChannelList(tpAniSirGlobal pMac,
+                                                           tpSirMsgQ pMsg)
+{
+    palZeroMemory(pMac->hHdd, &pMac->lim.dfschannelList,
+                  sizeof(tSirDFSChannelList));
+}
 
 /**
  * __limProcessSmeJoinReq()
@@ -1589,18 +1647,6 @@ __limProcessSmeJoinReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
         psessionEntry->htSupportedChannelWidthSet = (pSmeJoinReq->cbMode)?1:0; // This is already merged value of peer and self - done by csr in csrGetCBModeFromIes
         psessionEntry->htRecommendedTxWidthSet = psessionEntry->htSupportedChannelWidthSet;
         psessionEntry->htSecondaryChannelOffset = pSmeJoinReq->cbMode;
-
-        /* Record if management frames need to be protected */
-#ifdef WLAN_FEATURE_11W
-        if(eSIR_ED_AES_128_CMAC == pSmeJoinReq->MgmtEncryptionType)
-        {
-            psessionEntry->limRmfEnabled = 1;
-        }
-        else
-        {
-            psessionEntry->limRmfEnabled = 0;
-        }
-#endif
 
         /*Store Persona */
         psessionEntry->pePersona = pSmeJoinReq->staPersona;
@@ -2082,7 +2128,7 @@ __limProcessSmeReassocReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
      *  is lost upon disassociation and reassociation.
      */
 
-    limDelAllBASessions(pMac);
+    limDeleteBASessions(pMac, psessionEntry, BA_BOTH_DIRECTIONS);
 
     pMlmReassocReq->listenInterval = (tANI_U16) val;
 
@@ -2221,6 +2267,10 @@ __limProcessSmeDisassocReq(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
                 case eLIM_SME_LINK_EST_STATE:
                     psessionEntry->limPrevSmeState = psessionEntry->limSmeState;
                     psessionEntry->limSmeState= eLIM_SME_WT_DISASSOC_STATE;
+#ifdef FEATURE_WLAN_TDLS
+                    /* Delete all TDLS peers connected before leaving BSS*/
+                    limDeleteTDLSPeers(pMac, psessionEntry);
+#endif
                     MTRACE(macTrace(pMac, TRACE_CODE_SME_STATE, psessionEntry->peSessionId, psessionEntry->limSmeState));
                     break;
 
@@ -4184,6 +4234,7 @@ __limProcessSmeChangeBI(tpAniSirGlobal pMac, tANI_U32 *pMsgBuf)
         /* Update beacon */
         schSetFixedBeaconFields(pMac, psessionEntry);
 
+        beaconParams.bssIdx = psessionEntry->bssIdx;
         //Set change in beacon Interval
         beaconParams.beaconInterval = pChangeBIParams->beaconInterval;
         beaconParams.paramChangeBitmap = PARAM_BCN_INTERVAL_CHANGED;
@@ -4330,11 +4381,6 @@ limSendSetMaxTxPowerReq ( tpAniSirGlobal pMac, tPowerdBm txPower, tpPESession pS
 #if defined(WLAN_VOWIFI_DEBUG) || defined(FEATURE_WLAN_CCX)
    PELOG1(limLog( pMac, LOG1, "%s:%d: Allocated memory for pMaxTxParams...will be freed in other module", __func__, __LINE__ );)
 #endif
-   if( pMaxTxParams == NULL )
-   {
-      limLog( pMac, LOGE, "%s:%d: pMaxTxParams is NULL\n", __func__, __LINE__);
-      return eSIR_FAILURE;
-   }
    pMaxTxParams->power = txPower;
    palCopyMemory( pMac->hHdd, pMaxTxParams->bssId, pSessionEntry->bssId, sizeof(tSirMacAddr) );
    palCopyMemory( pMac->hHdd, pMaxTxParams->selfStaMacAddr, pSessionEntry->selfMacAddr, sizeof(tSirMacAddr) );
@@ -5108,12 +5154,13 @@ limProcessSmeReqMessages(tpAniSirGlobal pMac, tpSirMsgQ pMsg)
 {
     tANI_BOOLEAN bufConsumed = TRUE; //Set this flag to false within case block of any following message, that doesnt want pMsgBuf to be freed.
     tANI_U32 *pMsgBuf = pMsg->bodyptr;
-
+    tpSirSmeScanReq     pScanReq;
     PELOG1(limLog(pMac, LOG1, FL("LIM Received SME Message %s(%d) Global LimSmeState:%s(%d) Global LimMlmState: %s(%d)"),
          limMsgStr(pMsg->type), pMsg->type,
          limSmeStateStr(pMac->lim.gLimSmeState), pMac->lim.gLimSmeState,
          limMlmStateStr(pMac->lim.gLimMlmState), pMac->lim.gLimMlmState );)
 
+    pScanReq = (tpSirSmeScanReq) pMsgBuf;
     /* Special handling of some SME Req msgs where we have an existing GO session and
      * want to insert NOA before processing those msgs. These msgs will be processed later when
      * start event happens
@@ -5121,8 +5168,42 @@ limProcessSmeReqMessages(tpAniSirGlobal pMac, tpSirMsgQ pMsg)
     switch (pMsg->type)
     {
         case eWNI_SME_SCAN_REQ:
-        case eWNI_SME_OEM_DATA_REQ:
         case eWNI_SME_REMAIN_ON_CHANNEL_REQ:
+
+            /* If scan is disabled return from here
+             */
+            if (pMac->lim.fScanDisabled)
+            {
+                PELOGE(limLog(pMac, LOGE, FL("Error: Scan Disabled"));)
+                if (pMsg->type == eWNI_SME_SCAN_REQ)
+                {
+                   limSendSmeScanRsp(pMac,
+                                     offsetof(tSirSmeScanRsp,bssDescription[0]),
+                                     eSIR_SME_INVALID_PARAMETERS,
+                                     pScanReq->sessionId,
+                                     pScanReq->transactionId);
+
+                   bufConsumed = TRUE;
+                }
+                else if (pMsg->type == eWNI_SME_REMAIN_ON_CHANNEL_REQ)
+                {
+                    pMac->lim.gpDefdSmeMsgForNOA = NULL;
+                    pMac->lim.gpLimRemainOnChanReq = (tpSirRemainOnChnReq )pMsgBuf;
+                    limRemainOnChnRsp(pMac,eHAL_STATUS_FAILURE, NULL);
+
+                    /*
+                     * limRemainOnChnRsp will free the buffer this change is to
+                     * avoid "double free"
+                     */
+                    bufConsumed = FALSE;
+                }
+
+                return bufConsumed;
+            }
+            /*
+             * Do not add BREAK here
+             */
+        case eWNI_SME_OEM_DATA_REQ:
         case eWNI_SME_JOIN_REQ:
             /* If we have an existing P2P GO session we need to insert NOA before actually process this SME Req */
             if ((limIsNOAInsertReqd(pMac) == TRUE) && IS_FEATURE_SUPPORTED_BY_FW(P2P_GO_NOA_DECOUPLE_INIT_SCAN))
@@ -5165,6 +5246,9 @@ limProcessSmeReqMessages(tpAniSirGlobal pMac, tpSirMsgQ pMsg)
 
         case eWNI_SME_UPDATE_NOA:
             __limProcessSmeNoAUpdate(pMac, pMsgBuf);
+            break;
+        case eWNI_SME_CLEAR_DFS_CHANNEL_LIST:
+            __limProcessClearDfsChannelList(pMac, pMsg);
             break;
         case eWNI_SME_JOIN_REQ:
             __limProcessSmeJoinReq(pMac, pMsgBuf);

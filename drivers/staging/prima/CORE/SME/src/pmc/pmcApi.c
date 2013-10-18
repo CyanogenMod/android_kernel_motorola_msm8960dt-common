@@ -1362,15 +1362,16 @@ static void pmcProcessResponse( tpAniSirGlobal pMac, tSirSmeRsp *pMsg )
             /* Check that we are in the correct state for this message. */
             if (pMac->pmc.pmcState != REQUEST_FULL_POWER)
             {
-                smsLog(pMac, LOGE, FL("Got Exit IMPS Response Message while in state %d"), pMac->pmc.pmcState);
+                smsLog(pMac, LOGE, FL("Got Exit IMPS Response Message while "
+                   "in state %d"), pMac->pmc.pmcState);
                 break;
             }
 
             /* Enter Full Power State. */
             if (pMsg->statusCode != eSIR_SME_SUCCESS)
             {
-                smsLog(pMac, LOGP, FL("Response message to request to exit IMPS indicates failure, status %x"),
-                       pMsg->statusCode);
+                smsLog(pMac, LOGE, FL("Response message to request to exit "
+                   "IMPS indicates failure, status %x"), pMsg->statusCode);
             }
             pmcEnterFullPowerState(pMac);
         break;
@@ -2914,7 +2915,7 @@ pmcPrepareProbeReqTemplate(tpAniSirGlobal pMac,
     else if ( DOT11F_WARNED( nStatus ) )
     {
         VOS_TRACE(VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_ERROR, 
-            "There were warnings while packing a Probe Request (0x%08x)." );
+            "There were warnings while packing a Probe Request" );
     }
 
     *pusLen = nPayload + sizeof(tSirMacMgmtHdr); 
@@ -3132,7 +3133,7 @@ eHalStatus pmcGetFilterMatchCount
     tCsrRoamSession *pSession = CSR_GET_SESSION( pMac, sessionId );
 
     VOS_TRACE( VOS_MODULE_ID_SME, VOS_TRACE_LEVEL_INFO, 
-        "%s: filterId = %d", __func__);
+        "%s", __func__);
 
     if(NULL == pSession )
     {

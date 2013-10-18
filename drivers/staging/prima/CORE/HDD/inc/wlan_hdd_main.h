@@ -83,12 +83,10 @@
 #define LIBRA_CARD_REMOVE_DETECT_MAX_COUNT      5
 /** Number of Tx Queues */  
 #define NUM_TX_QUEUES 4
-// BEGIN Motorola, IKHSS7-12524 Increase wlan Kernel/driver buffer for mobile hotspot
 /** Queue length specified to OS in the net_device */
-#define NET_DEV_TX_QUEUE_LEN 1000
+#define NET_DEV_TX_QUEUE_LEN 100
 /** HDD's internal Tx Queue Length. Needs to be a power of 2 */
-#define HDD_TX_QUEUE_MAX_LEN 1024
-// END IKHSS7-12524
+#define HDD_TX_QUEUE_MAX_LEN 128
 /** HDD internal Tx Queue Low Watermark. Net Device TX queue is disabled
  *  when HDD queue becomes full. This Low watermark is used to enable
  *  the Net Device queue again */
@@ -132,6 +130,8 @@
 /** Maximum time(ms) to wait for tdls mgmt to complete **/
 #define WAIT_TIME_TDLS_MGMT         11000
 
+/** Maximum time(ms) to wait for tdls initiator to start direct communication **/
+#define WAIT_TIME_TDLS_INITIATOR    600
 /* Maximum time to get crda entry settings */
 #define CRDA_WAIT_TIME 300
 
@@ -165,17 +165,22 @@
 #define WLAN_HDD_P2P_SOCIAL_CHANNELS 3
 #define WLAN_HDD_P2P_SINGLE_CHANNEL_SCAN 1
 
-#ifdef WLAN_FEATURE_11W
-#define WLAN_HDD_SA_QUERY_ACTION_FRAME 8
-#endif
+#define WLAN_HDD_IS_SOCIAL_CHANNEL(center_freq) \
+(((center_freq) == 2412) || ((center_freq) == 2437) || ((center_freq) == 2462))
+
+#define WLAN_HDD_CHANNEL_IN_UNII_1_BAND(center_freq) \
+(((center_freq) == 5180 ) || ((center_freq) == 5200) \
+|| ((center_freq) == 5220) || ((center_freq) == 5240))
 
 #define WLAN_HDD_PUBLIC_ACTION_TDLS_DISC_RESP 14
 #define WLAN_HDD_TDLS_ACTION_FRAME 12
 #ifdef WLAN_FEATURE_HOLD_RX_WAKELOCK
-#define HDD_WAKE_LOCK_DURATION 500 //in msecs
+#define HDD_WAKE_LOCK_DURATION 50 //in msecs
 #endif
 
 #define HDD_SAP_WAKE_LOCK_DURATION 10000 //in msecs
+
+#define HDD_MOD_EXIT_SSR_MAX_RETRIES 30
 
 /* Maximum number of interfaces allowed(STA, P2P Device, P2P Interface) */
 #define WLAN_MAX_INTERFACES 3
@@ -184,6 +189,12 @@
 #define GTK_OFFLOAD_ENABLE  0
 #define GTK_OFFLOAD_DISABLE 1
 #endif
+
+#define HDD_MAC_ADDR_LEN    6
+typedef v_U8_t tWlanHddMacAddr[HDD_MAC_ADDR_LEN];
+
+#define HDD_MAC_ADDR_LEN    6
+typedef v_U8_t tWlanHddMacAddr[HDD_MAC_ADDR_LEN];
 
 typedef struct hdd_tx_rx_stats_s
 {
@@ -229,14 +240,6 @@ typedef struct hdd_chip_reset_stats_s
    __u32    totalUnknownExceptions;
 } hdd_chip_reset_stats_t;
 
-#ifdef WLAN_FEATURE_11W
-typedef struct hdd_pmf_stats_s
-{
-   uint8    numUnprotDeauthRx;
-   uint8    numUnprotDisassocRx;
-} hdd_pmf_stats_t;
-#endif
-
 typedef struct hdd_stats_s
 {
    tCsrSummaryStatsInfo       summary_stat;
@@ -247,9 +250,6 @@ typedef struct hdd_stats_s
    tCsrPerStaStatsInfo        perStaStats;
    hdd_tx_rx_stats_t          hddTxRxStats;
    hdd_chip_reset_stats_t     hddChipResetStats;
-#ifdef WLAN_FEATURE_11W
-   hdd_pmf_stats_t            hddPmfStats;
-#endif
 } hdd_stats_t;
 
 typedef enum
@@ -276,6 +276,12 @@ typedef struct roaming_info_s
 {
    HDD_ROAM_STATE roamingState;
    vos_event_t roamingEvent;
+
+   tWlanHddMacAddr bssid;
+   tWlanHddMacAddr peerMac;
+   tANI_U32 roamId;
+   eRoamCmdStatus roamStatus;
+   v_BOOL_t deferKeyComplete;
    
 } roaming_info_t;
 
@@ -453,7 +459,6 @@ typedef struct
    v_TIME_t             lastblockTs;
    v_TIME_t             lastOpenTs;
    struct netdev_queue *blockedQueue;
-   v_BOOL_t             qBlocked;
 } hdd_thermal_mitigation_info_t;
 
 typedef struct hdd_remain_on_chan_ctx
@@ -526,8 +531,6 @@ struct hdd_station_ctx
 
    roaming_info_t roam_info;
 
-   v_BOOL_t bSendDisconnect;
-
 #if  defined (WLAN_FEATURE_VOWIFI_11R) || defined (FEATURE_WLAN_CCX) || defined(FEATURE_WLAN_LFR)
    int     ft_carrier_on;
 #endif
@@ -535,6 +538,7 @@ struct hdd_station_ctx
 #ifdef WLAN_FEATURE_GTK_OFFLOAD
    hddGtkOffloadParams gtkOffloadRequestParams;
 #endif
+   v_BOOL_t hdd_ReassocScenario;
 };
 
 #define BSS_STOP    0 
@@ -667,7 +671,6 @@ typedef struct multicast_addr_list
    v_U8_t isFilterApplied;
    v_U8_t mc_cnt;
    v_U8_t addr[WLAN_HDD_MAX_MC_ADDR_LIST][ETH_ALEN];
-   v_U8_t filter_index[WLAN_HDD_MAX_MC_ADDR_LIST]; // IKJB42MAIN-1244, Motorola, a19091
 } t_multicast_add_list;
 #endif
 
@@ -796,13 +799,6 @@ struct hdd_adapter_s
    hdd_cfg80211_state_t cfg80211State;
 
 #ifdef WLAN_FEATURE_PACKET_FILTERING
-   // IKJB42MAIN-1244, Motorola, a19091 - START
-   v_U32_t user_filter_config;
-   v_U32_t driver_filter_config;
-   v_U8_t ipv6_user_set_map : 4;
-   v_U8_t ipv6_code_set_map : 4;
-   v_SCHAR_t filter_v6_index;
-   // IKJB42MAIN-1244, Motorola, a19091 - END
    t_multicast_add_list mc_addr_list;
 #endif
 
@@ -827,7 +823,12 @@ typedef struct hdd_dynamic_mcbcfilter_s
 #define WLAN_HDD_GET_HOSTAP_STATE_PTR(pAdapter) (&(pAdapter)->sessionCtx.ap.HostapdState)
 #define WLAN_HDD_GET_CFG_STATE_PTR(pAdapter)  (&(pAdapter)->cfg80211State)
 #ifdef FEATURE_WLAN_TDLS
-#define WLAN_HDD_GET_TDLS_CTX_PTR(pAdapter) ((tdlsCtx_t*)(pAdapter)->sessionCtx.station.pHddTdlsCtx)
+#define WLAN_HDD_IS_TDLS_SUPPORTED_ADAPTER(pAdapter) \
+        (((WLAN_HDD_INFRA_STATION != pAdapter->device_mode) && \
+        (WLAN_HDD_P2P_CLIENT != pAdapter->device_mode)) ? 0 : 1)
+#define WLAN_HDD_GET_TDLS_CTX_PTR(pAdapter) \
+        ((WLAN_HDD_IS_TDLS_SUPPORTED_ADAPTER(pAdapter)) ? \
+        (tdlsCtx_t*)(pAdapter)->sessionCtx.station.pHddTdlsCtx : NULL)
 #endif
 
 typedef struct hdd_adapter_list_node
@@ -878,14 +879,6 @@ struct hdd_context_s
    /** Pointer for nv data */
    const struct firmware *nv;
    
- #ifdef WLAN_NV_OTA_UPGRADE
-   /** Pointer for nv data cal */
-   const struct firmware *nv_cal;
-
-   /** Pointer for nv data reg */
-   const struct firmware *nv_reg;
-#endif
-
    /** Pointer to the parent device */
    struct device *parent_dev;
 
@@ -1008,6 +1001,17 @@ struct hdd_context_s
 #endif
 
     hdd_traffic_monitor_t traffic_monitor;
+
+    /* Use below lock to protect access to isSchedScanUpdatePending
+     * since it will be accessed in two different contexts.
+     */
+    spinlock_t schedScan_lock;
+
+    // Flag keeps track of wiphy suspend/resume
+    v_BOOL_t isWiphySuspended;
+
+    // Indicates about pending sched_scan results
+    v_BOOL_t isSchedScanUpdatePending;
 };
 
 
@@ -1072,7 +1076,6 @@ void wlan_hdd_clear_concurrency_mode(hdd_context_t *pHddCtx, tVOS_CON_MODE mode)
 void wlan_hdd_reset_prob_rspies(hdd_adapter_t* pHostapdAdapter);
 void hdd_prevent_suspend(void);
 void hdd_allow_suspend(void);
-void hdd_prevent_suspend_after_scan(long hz); //Mot IKHSS7-28961 :Empty scan results
 void hdd_allow_suspend_timeout(v_U32_t timeout);
 bool hdd_is_ssr_required(void);
 void hdd_set_ssr_required(e_hdd_ssr_required value);
@@ -1080,9 +1083,15 @@ void hdd_set_ssr_required(e_hdd_ssr_required value);
 VOS_STATUS hdd_enable_bmps_imps(hdd_context_t *pHddCtx);
 VOS_STATUS hdd_disable_bmps_imps(hdd_context_t *pHddCtx, tANI_U8 session_type);
 
-eHalStatus hdd_smeCloseSessionCallback(void *pContext);
+void wlan_hdd_cfg80211_update_reg_info(struct wiphy *wiphy);
 VOS_STATUS wlan_hdd_restart_driver(hdd_context_t *pHddCtx);
 void hdd_exchange_version_and_caps(hdd_context_t *pHddCtx);
 void hdd_set_pwrparams(hdd_context_t *pHddCtx);
 void hdd_reset_pwrparams(hdd_context_t *pHddCtx);
+int wlan_hdd_validate_context(hdd_context_t *pHddCtx);
+#ifdef WLAN_FEATURE_PACKET_FILTERING
+int wlan_hdd_setIPv6Filter(hdd_context_t *pHddCtx, tANI_U8 filterType, tANI_U8 sessionId);
+#endif
+VOS_STATUS hdd_issta_p2p_clientconnected(hdd_context_t *pHddCtx);
+
 #endif    // end #if !defined( WLAN_HDD_MAIN_H )

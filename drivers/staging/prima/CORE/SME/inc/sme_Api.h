@@ -111,8 +111,9 @@ typedef struct _smeConfigParams
    tP2PConfigParam  p2pConfig;
 #endif
 #if  defined (WLAN_FEATURE_VOWIFI_11R) || defined (FEATURE_WLAN_CCX) || defined(FEATURE_WLAN_LFR)
-    tANI_U8   isFastTransitionEnabled;
-    tANI_U8   RoamRssiDiff;
+    tANI_U8       isFastTransitionEnabled;
+    tANI_U8       RoamRssiDiff;
+    tANI_BOOLEAN  isWESModeEnabled;
 #endif
 } tSmeConfigParams, *tpSmeConfigParams;
 
@@ -221,7 +222,7 @@ eHalStatus sme_Stop(tHalHandle hHal, tANI_BOOLEAN pmcFlag);
   \sa
   
   --------------------------------------------------------------------------*/
-eHalStatus sme_OpenSession(tHalHandle hHal, csrRoamCompleteCallback callback, void *pContext, 
+eHalStatus sme_OpenSession(tHalHandle hHal, csrRoamCompleteCallback callback, void *pContext,
                            tANI_U8 *pSelfMacAddr, tANI_U8 *pbSessionId);
 
 
@@ -1979,16 +1980,6 @@ eHalStatus sme_8023MulticastList(tHalHandle hHal, tANI_U8 sessionId, tpSirRcvFlt
 eHalStatus sme_ReceiveFilterSetFilter(tHalHandle hHal, tpSirRcvPktFilterCfgType pRcvPktFilterCfg,
                                            tANI_U8 sessionId);
 
-// IKJB42MAIN-1244, Motorola, a19091 -- BEGIN
-/* ---------------------------------------------------------------------------
-    \fn sme_ReceiveSetMcFilter
-    \brief  API to set Receive Packet Filter from ISR context
-    \param  tSirInvokeV6Filter - Receive Packet Filter callback param
-    \return eHalStatus
-  ---------------------------------------------------------------------------*/
-eHalStatus sme_ReceiveSetMcFilter(tSirInvokeV6Filter *filterConfig);
-// IKJB42MAIN-1244, Motorola, a19091 -- END
-
 /* ---------------------------------------------------------------------------
     \fn sme_GetFilterMatchCount
     \brief  API to get D0 PC Filter Match Count
@@ -2257,8 +2248,64 @@ void sme_ResetPowerValuesFor5G (tHalHandle hHal);
     \param  nRoamPrefer5GHz Enable/Disable Roam prefer 5G runtime option
     \- return Success or failure
     -------------------------------------------------------------------------*/
-
 eHalStatus sme_UpdateRoamPrefer5GHz(tHalHandle hHal, v_BOOL_t nRoamPrefer5GHz);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_setRoamIntraBand
+    \brief  enable/disable Intra band roaming
+            This function is called through dynamic setConfig callback function
+            to configure the intra band roaming
+    \param  hHal - HAL handle for device
+    \param  nRoamIntraBand Enable/Disable Intra band roaming
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_setRoamIntraBand(tHalHandle hHal, const v_BOOL_t nRoamIntraBand);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_UpdateRoamScanNProbes
+    \brief  function to update roam scan N probes
+            This function is called through dynamic setConfig callback function
+            to update roam scan N probes
+    \param  hHal - HAL handle for device
+    \param  nProbes number of probe requests to be sent out
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_UpdateRoamScanNProbes(tHalHandle hHal, const v_U8_t nProbes);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_UpdateRoamScanHomeAwayTime
+    \brief  function to update roam scan Home away time
+            This function is called through dynamic setConfig callback function
+            to update roam scan home away time
+    \param  hHal - HAL handle for device
+    \param  nRoamScanAwayTime Scan home away time
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_UpdateRoamScanHomeAwayTime(tHalHandle hHal, const v_U16_t nRoamScanHomeAwayTime);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getRoamIntraBand
+    \brief  get Intra band roaming
+    \param  hHal - HAL handle for device
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+v_BOOL_t sme_getRoamIntraBand(tHalHandle hHal);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getRoamScanNProbes
+    \brief  get N Probes
+    \param  hHal - HAL handle for device
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+v_U8_t sme_getRoamScanNProbes(tHalHandle hHal);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getRoamScanHomeAwayTime
+    \brief  get Roam scan home away time
+    \param  hHal - HAL handle for device
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+v_U16_t sme_getRoamScanHomeAwayTime(tHalHandle hHal);
 
 /* ---------------------------------------------------------------------------
     \fn sme_UpdateImmediateRoamRssiDiff
@@ -2301,6 +2348,29 @@ eHalStatus sme_UpdateRoamRssiDiff(tHalHandle hHal, v_U8_t RoamRssiDiff);
 
 eHalStatus sme_UpdateFastTransitionEnabled(tHalHandle hHal,
         v_BOOL_t isFastTransitionEnabled);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_UpdateWESMode
+    \brief  Update WESMode
+            This function is called through dynamic setConfig callback function
+            to configure isWESModeEnabled
+    \param  hHal - HAL handle for device
+    \param  isWESModeEnabled - Enable/Disable WES Mode
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_UpdateWESMode(tHalHandle hHal, v_BOOL_t isWESModeEnabled);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_SetRoamScanControl
+    \brief  Set roam scan control
+            This function is called to set roam scan control
+            if roam scan control is set to 0, roaming scan cache is cleared
+            any value other than 0 is treated as invalid value
+    \param  hHal - HAL handle for device
+    \return eHAL_STATUS_SUCCESS - SME update config successfully.
+          Other status means SME failure to update
+    -------------------------------------------------------------------------*/
+eHalStatus sme_SetRoamScanControl(tHalHandle hHal, v_BOOL_t roamScanControl);
 #endif /* (WLAN_FEATURE_VOWIFI_11R) || (FEATURE_WLAN_CCX) || (FEATURE_WLAN_LFR) */
 
 #ifdef FEATURE_WLAN_LFR
@@ -2316,7 +2386,7 @@ eHalStatus sme_UpdateFastTransitionEnabled(tHalHandle hHal,
   --------------------------------------------------------------------------*/
 
 eHalStatus sme_UpdateIsFastRoamIniFeatureEnabled(tHalHandle hHal,
-        v_BOOL_t isFastRoamIniFeatureEnabled);
+        const v_BOOL_t isFastRoamIniFeatureEnabled);
 #endif /* FEATURE_WLAN_LFR */
 
 #ifdef FEATURE_WLAN_CCX
@@ -2332,7 +2402,7 @@ eHalStatus sme_UpdateIsFastRoamIniFeatureEnabled(tHalHandle hHal,
   --------------------------------------------------------------------------*/
 
 eHalStatus sme_UpdateIsCcxFeatureEnabled(tHalHandle hHal,
-        v_BOOL_t isCcxIniFeatureEnabled);
+        const v_BOOL_t isCcxIniFeatureEnabled);
 
 #endif /* FEATURE_WLAN_CCX */
 
@@ -2350,6 +2420,7 @@ eHalStatus sme_UpdateIsCcxFeatureEnabled(tHalHandle hHal,
 eHalStatus sme_UpdateConfigFwRssiMonitoring(tHalHandle hHal,
         v_BOOL_t fEnableFwRssiMonitoring);
 
+#ifdef WLAN_FEATURE_NEIGHBOR_ROAMING
 /*--------------------------------------------------------------------------
   \brief sme_setNeighborLookupRssiThreshold() - update neighbor lookup rssi threshold
   This is a synchronuous call
@@ -2413,6 +2484,79 @@ v_U16_t sme_getNeighborScanRefreshPeriod(tHalHandle hHal);
   --------------------------------------------------------------------------*/
 v_U16_t sme_getEmptyScanRefreshPeriod(tHalHandle hHal);
 
+/* ---------------------------------------------------------------------------
+    \fn sme_UpdateEmptyScanRefreshPeriod
+    \brief  Update nEmptyScanRefreshPeriod
+            This function is called through dynamic setConfig callback function
+            to configure nEmptyScanRefreshPeriod
+            Usage: adb shell iwpriv wlan0 setConfig nEmptyScanRefreshPeriod=[0 .. 60]
+    \param  hHal - HAL handle for device
+    \param  nEmptyScanRefreshPeriod - scan period following empty scan results.
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_UpdateEmptyScanRefreshPeriod(tHalHandle hHal, v_U16_t nEmptyScanRefreshPeriod);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_setNeighborScanMinChanTime
+    \brief  Update nNeighborScanMinChanTime
+            This function is called through dynamic setConfig callback function
+            to configure gNeighborScanChannelMinTime
+            Usage: adb shell iwpriv wlan0 setConfig gNeighborScanChannelMinTime=[0 .. 60]
+    \param  hHal - HAL handle for device
+    \param  nNeighborScanMinChanTime - Channel minimum dwell time
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_setNeighborScanMinChanTime(tHalHandle hHal, const v_U16_t nNeighborScanMinChanTime);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_setNeighborScanMaxChanTime
+    \brief  Update nNeighborScanMaxChanTime
+            This function is called through dynamic setConfig callback function
+            to configure gNeighborScanChannelMaxTime
+            Usage: adb shell iwpriv wlan0 setConfig gNeighborScanChannelMaxTime=[0 .. 60]
+    \param  hHal - HAL handle for device
+    \param  nNeighborScanMinChanTime - Channel maximum dwell time
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_setNeighborScanMaxChanTime(tHalHandle hHal, const v_U16_t nNeighborScanMaxChanTime);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getNeighborScanMinChanTime
+    \brief  get neighbor scan min channel time
+    \param hHal - The handle returned by macOpen.
+    \return v_U16_t - channel min time value
+    -------------------------------------------------------------------------*/
+v_U16_t sme_getNeighborScanMinChanTime(tHalHandle hHal);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getNeighborScanMaxChanTime
+    \brief  get neighbor scan max channel time
+    \param hHal - The handle returned by macOpen.
+    \return v_U16_t - channel max time value
+    -------------------------------------------------------------------------*/
+v_U16_t sme_getNeighborScanMaxChanTime(tHalHandle hHal);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_setNeighborScanPeriod
+    \brief  Update nNeighborScanPeriod
+            This function is called through dynamic setConfig callback function
+            to configure nNeighborScanPeriod
+            Usage: adb shell iwpriv wlan0 setConfig nNeighborScanPeriod=[0 .. 60]
+    \param  hHal - HAL handle for device
+    \param  nNeighborScanPeriod - neighbor scan period
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_setNeighborScanPeriod(tHalHandle hHal, const v_U16_t nNeighborScanPeriod);
+
+/* ---------------------------------------------------------------------------
+    \fn sme_getNeighborScanPeriod
+    \brief  get neighbor scan period
+    \param hHal - The handle returned by macOpen.
+    \return v_U16_t - neighbor scan period
+    -------------------------------------------------------------------------*/
+v_U16_t sme_getNeighborScanPeriod(tHalHandle hHal);
+
+#endif
 
 #if  defined (WLAN_FEATURE_VOWIFI_11R) || defined (FEATURE_WLAN_CCX) || defined(FEATURE_WLAN_LFR)
 /*--------------------------------------------------------------------------
@@ -2481,20 +2625,71 @@ eHalStatus sme_getRoamScanChannelList(tHalHandle hHal, tANI_U8 *pChannelList,
   --------------------------------------------------------------------------*/
 eHalStatus sme_GetCountryRevision(tHalHandle hHal, tANI_U8 *pRevision);
 
+/*--------------------------------------------------------------------------
+  \brief sme_getWESMode() - getWES Mode
+  This is a synchronous call
+  \param hHal - The handle returned by macOpen.
+  \return v_U8_t - WES Mode Enabled(1)/Disabled(0)
+  \sa
+  --------------------------------------------------------------------------*/
+v_BOOL_t sme_GetWESMode(tHalHandle hHal);
+
+/*--------------------------------------------------------------------------
+  \brief sme_GetRoamScanControl() - get scan control
+  This is a synchronous call
+  \param hHal - The handle returned by macOpen.
+  \return v_BOOL_t - Enabled(1)/Disabled(0)
+  \sa
+  --------------------------------------------------------------------------*/
+v_BOOL_t sme_GetRoamScanControl(tHalHandle hHal);
+
+/*--------------------------------------------------------------------------
+  \brief sme_getIsCcxFeatureEnabled() - get CCX feature enabled or not
+  This is a synchronuous call
+  \param hHal - The handle returned by macOpen.
+  \return TRUE (1) - if the CCX feature is enabled
+          FALSE (0) - if feature is disabled (compile or runtime)
+  \sa
+  --------------------------------------------------------------------------*/
+tANI_BOOLEAN sme_getIsCcxFeatureEnabled(tHalHandle hHal);
+
+/*--------------------------------------------------------------------------
+  \brief sme_getIsLfrFeatureEnabled() - get LFR feature enabled or not
+  This is a synchronuous call
+  \param hHal - The handle returned by macOpen.
+  \return TRUE (1) - if the feature is enabled
+          FALSE (0) - if feature is disabled (compile or runtime)
+  \sa
+  --------------------------------------------------------------------------*/
+tANI_BOOLEAN sme_getIsLfrFeatureEnabled(tHalHandle hHal);
+
+/*--------------------------------------------------------------------------
+  \brief sme_getIsFtFeatureEnabled() - get FT feature enabled or not
+  This is a synchronuous call
+  \param hHal - The handle returned by macOpen.
+  \return TRUE (1) - if the feature is enabled
+          FALSE (0) - if feature is disabled (compile or runtime)
+  \sa
+  --------------------------------------------------------------------------*/
+tANI_BOOLEAN sme_getIsFtFeatureEnabled(tHalHandle hHal);
+
 #endif
 
-/* ---------------------------------------------------------------------------
-    \fn sme_UpdateEmptyScanRefreshPeriod
-    \brief  Update nnEmptyScanRefreshPeriod
-            This function is called through dynamic setConfig callback function
-            to configure nnEmptyScanRefreshPeriod
-            Usage: adb shell iwpriv wlan0 setConfig nEmptyScanRefreshPeriod=[0 .. 60]
-    \param  hHal - HAL handle for device
-    \param  nEmptyScanRefreshPeriod - scan period following empty scan results.
-    \- return Success or failure
-    -------------------------------------------------------------------------*/
+#ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
+/*--------------------------------------------------------------------------
+  \brief sme_UpdateRoamScanOffloadEnabled() - enable/disable roam scan offload feaure
+  It is used at in the REG_DYNAMIC_VARIABLE macro definition of
+  gRoamScanOffloadEnabled.
+  This is a synchronous call
+  \param hHal - The handle returned by macOpen.
+  \return eHAL_STATUS_SUCCESS - SME update config successfully.
+          Other status means SME is failed to update.
+  \sa
+  --------------------------------------------------------------------------*/
 
-eHalStatus sme_UpdateEmptyScanRefreshPeriod(tHalHandle hHal, v_U16_t nEmptyScanRefreshPeriod);
+eHalStatus sme_UpdateRoamScanOffloadEnabled(tHalHandle hHal, v_BOOL_t nRoamScanOffloadEnabled);
+#endif
+
 
 /* ---------------------------------------------------------------------------
     \fn sme_IsFeatureSupportedByFW
@@ -2549,13 +2744,6 @@ VOS_STATUS sme_AddTdlsPeerSta(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr pe
     -------------------------------------------------------------------------*/
 VOS_STATUS sme_DeleteTdlsPeerSta(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac);
 /* ---------------------------------------------------------------------------
-    \fn sme_IsPmcBmps
-    \brief  API to Check if PMC state is BMPS.
-
-    \- return v_BOOL_t
-    -------------------------------------------------------------------------*/
-v_BOOL_t sme_IsPmcBmps(tHalHandle hHal);
-/* ---------------------------------------------------------------------------
     \fn sme_SetTdlsPowerSaveProhibited
     \API to set/reset the isTdlsPowerSaveProhibited.
 
@@ -2563,6 +2751,14 @@ v_BOOL_t sme_IsPmcBmps(tHalHandle hHal);
     -------------------------------------------------------------------------*/
 void sme_SetTdlsPowerSaveProhibited(tHalHandle hHal, v_BOOL_t val);
 #endif
+/* ---------------------------------------------------------------------------
+    \fn sme_IsPmcBmps
+    \brief  API to Check if PMC state is BMPS.
+
+    \- return v_BOOL_t
+    -------------------------------------------------------------------------*/
+v_BOOL_t sme_IsPmcBmps(tHalHandle hHal);
+
 #ifdef FEATURE_WLAN_TDLS_INTERNAL
 typedef struct smeTdlsDisResult
 {
@@ -2575,7 +2771,45 @@ v_U8_t sme_GetTdlsDiscoveryResult(tHalHandle hHal,
                                  tSmeTdlsDisResult *disResult, v_U8_t listType);
 VOS_STATUS sme_StartTdlsLinkSetupReq(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac);
 VOS_STATUS sme_StartTdlsLinkTeardownReq(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac);
-
 #endif /* FEATURE_WLAN_TDLS */
+eHalStatus sme_UpdateDfsSetting(tHalHandle hHal, tANI_U8 fUpdateEnableDFSChnlScan);
 
+/*
+ * SME API to enable/disable WLAN driver initiated SSR
+ */
+void sme_UpdateEnableSSR(tHalHandle hHal, tANI_BOOLEAN enableSSR);
+
+/* ---------------------------------------------------------------------------
+
+    \fn sme_SetPhyMode
+
+    \brief Changes the PhyMode.
+
+    \param hHal - The handle returned by macOpen.
+
+    \param phyMode new phyMode which is to set
+
+    \return eHalStatus  SUCCESS.
+
+  -------------------------------------------------------------------------------*/
+eHalStatus sme_SetPhyMode(tHalHandle hHal, eCsrPhyMode phyMode);
+
+/* ---------------------------------------------------------------------------
+
+    \fn sme_GetPhyMode
+
+    \brief gets current PhyMode.
+
+    \param hHal - The handle returned by macOpen.
+
+    \return eHalStatus PhyMode
+
+  -------------------------------------------------------------------------------*/
+eCsrPhyMode sme_GetPhyMode(tHalHandle hHal);
+
+/*
+ * sme API to find if any infra station or P2P-Client is connected
+ * return status
+*/
+VOS_STATUS sme_isSta_p2p_clientConnected(tHalHandle hHal);
 #endif //#if !defined( __SME_API_H )

@@ -110,10 +110,7 @@ struct statsContext
    hdd_adapter_t *pAdapter;
    unsigned int magic;
 };
-#define SAP_24GHZ_CH_COUNT (14)
-
-#define MIN_MTU_SIZE 256     // Motorola, IKHSS7-19443, A21623, Hotspot MTU changes
-
+#define SAP_24GHZ_CH_COUNT (14) 
 /*--------------------------------------------------------------------------- 
  *   Function definitions
  *-------------------------------------------------------------------------*/
@@ -211,12 +208,6 @@ int hdd_hostapd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 int hdd_hostapd_change_mtu(struct net_device *dev, int new_mtu)
 {
-//  Motorola, IKHSS7-19443, A21623, Hotspot MTU changes
-    if ( (new_mtu  < MIN_MTU_SIZE)  || (new_mtu > IEEE80211_MAX_DATA_LEN - 26) )
-        return EINVAL;
-
-    dev->mtu = new_mtu;
-//  End IKHSS7-19443
     return 0;
 }
 
@@ -804,14 +795,15 @@ VOS_STATUS hdd_hostapd_SAPEventCB( tpSap_Event pSapEvent, v_PVOID_t usrDataForCa
             break;
 
         case eSAP_MAX_ASSOC_EXCEEDED:
-            /* Beging Motorola IKHSS7-18970 fpx478, 30/03/2012, nottification to MHS */
-            /* Redefining the Custom Message
-             * IW_CUSTOM_MAX will inform when STA is denied when assoc due to Maximum Mobile
-             * Hotspot connections reached. Please disconnect one or more devices to enable
-             * the new device connection, and we dont require the MAC address of the STA
-             */
-            snprintf(maxAssocExceededEvent, IW_CUSTOM_MAX, "eSAP_MAX_ASSOC_EXCEEDED");
-            /* END IKHSS7-18970 */
+            snprintf(maxAssocExceededEvent, IW_CUSTOM_MAX, "Peer %02x:%02x:%02x:%02x:%02x:%02x denied"
+                    " assoc due to Maximum Mobile Hotspot connections reached. Please disconnect"
+                    " one or more devices to enable the new device connection",
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[0],
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[1],
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[2],
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[3],
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[4],
+                    pSapEvent->sapevt.sapMaxAssocExceeded.macaddr.bytes[5]);
             we_event = IWEVCUSTOM; /* Discovered a new node (AP mode). */
             wrqu.data.pointer = maxAssocExceededEvent;
             wrqu.data.length = strlen(maxAssocExceededEvent);
@@ -851,6 +843,20 @@ stopbss :
         /* Change the BSS state now since, as we are shutting things down,
          * we don't want interfaces to become re-enabled */
         pHostapdState->bssState = BSS_STOP;
+
+        if (0 != (WLAN_HDD_GET_CTX(pHostapdAdapter))->cfg_ini->nAPAutoShutOff)
+        {
+            if (VOS_TIMER_STATE_RUNNING == pHddApCtx->hdd_ap_inactivity_timer.state)
+            {
+                vos_status = vos_timer_stop(&pHddApCtx->hdd_ap_inactivity_timer);
+                if (!VOS_IS_STATUS_SUCCESS(vos_status))
+                    hddLog(LOGE, FL("Failed to stop AP inactivity timer"));
+            }
+
+            vos_status = vos_timer_destroy(&pHddApCtx->hdd_ap_inactivity_timer);
+            if (!VOS_IS_STATUS_SUCCESS(vos_status))
+                hddLog(LOGE, FL("Failed to Destroy AP inactivity timer"));
+        }
 
         /* Stop the pkts from n/w stack as we are going to free all of
          * the TX WMM queues for all STAID's */
@@ -981,7 +987,7 @@ static iw_softap_setparam(struct net_device *dev,
 {
     hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
     tHalHandle hHal = WLAN_HDD_GET_HAL_CTX(pHostapdAdapter);
-    int *value = (int *)(wrqu->data.pointer);
+    int *value = (int *)extra;
     int sub_cmd = value[0];
     int set_value = value[1];
     eHalStatus status;
@@ -1154,7 +1160,7 @@ int iw_softap_modify_acl(struct net_device *dev, struct iw_request_info *info,
 {
     hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
     v_CONTEXT_t pVosContext = (WLAN_HDD_GET_CTX(pHostapdAdapter))->pvosContext; 
-    char *value = (char *)(wrqu->data.pointer);
+    v_BYTE_t *value = (v_BYTE_t*)extra;
     v_U8_t pPeerStaMac[VOS_MAC_ADDR_SIZE];
     int listType, cmd, i;
     int ret = 0; /* success */
@@ -1202,23 +1208,15 @@ static iw_softap_set_max_tx_power(struct net_device *dev,
 {
     hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
     tHalHandle hHal = WLAN_HDD_GET_HAL_CTX(pHostapdAdapter);
-    int cmd_len = wrqu->data.length;
-    int *value = (int *)kmalloc(cmd_len+1, GFP_KERNEL);
+    int *value = (int *)extra;
     int set_value;
     tSirMacAddr bssid = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
     tSirMacAddr selfMac = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
     if (NULL == value)
         return -ENOMEM;
-    if(copy_from_user((char *) value, (char*)(wrqu->data.pointer), cmd_len)) {
-        hddLog(VOS_TRACE_LEVEL_FATAL, "%s -- copy_from_user --data pointer failed! bailing",
-                __func__);
-        kfree(value);
-        return -EFAULT;
-    }
 
     set_value = value[0];
-    kfree(value);
     if (eHAL_STATUS_SUCCESS != sme_SetMaxTxPower(hHal, bssid, selfMac, set_value))
     {
         hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Setting maximum tx power failed",
@@ -1345,7 +1343,7 @@ static iw_softap_disassoc_sta(struct net_device *dev,
     /* iwpriv tool or framework calls this ioctl with
      * data passed in extra (less than 16 octets);
      */
-    peerMacAddr = (v_U8_t *)(wrqu->data.pointer);
+    peerMacAddr = (v_U8_t *)(extra);
 
     hddLog(LOG1, "data %02x:%02x:%02x:%02x:%02x:%02x",
             peerMacAddr[0], peerMacAddr[1], peerMacAddr[2],
@@ -1476,7 +1474,7 @@ static iw_softap_commit(struct net_device *dev,
                  //TODO: Need to handle mixed mode     
                  pConfig->RSNEncryptType = RSNEncryptType; // Use the cipher type in the RSN IE
                  pConfig->mcRSNEncryptType = mcRSNEncryptType;
-                 hddLog( LOG1, FL("%s: CSR AuthType = %d, EncryptionType = %d mcEncryptionType = %d\n"), 
+                 hddLog( LOG1, FL("CSR AuthType = %d, EncryptionType = %d mcEncryptionType = %d\n"),
                                   RSNAuthType, RSNEncryptType, mcRSNEncryptType);
              } 
         }
@@ -1506,8 +1504,8 @@ static iw_softap_commit(struct net_device *dev,
     // ht_capab is not what the name conveys,this is used for protection bitmap
     pConfig->ht_capab = (WLAN_HDD_GET_CTX(pHostapdAdapter))->cfg_ini->apProtection;
 
-    if (pCommitConfig->num_accept_mac > MAX_MAC_ADDRESS_ACCEPTED)
-        num_mac = pConfig->num_accept_mac = MAX_MAC_ADDRESS_ACCEPTED;
+    if (pCommitConfig->num_accept_mac > MAX_ACL_MAC_ADDRESS)
+        num_mac = pConfig->num_accept_mac = MAX_ACL_MAC_ADDRESS;
     else
         num_mac = pConfig->num_accept_mac = pCommitConfig->num_accept_mac;
     acl_entry = pCommitConfig->accept_mac;
@@ -1516,8 +1514,8 @@ static iw_softap_commit(struct net_device *dev,
         vos_mem_copy(&pConfig->accept_mac[i], acl_entry->addr, sizeof(v_MACADDR_t));
         acl_entry++;
     }
-    if (pCommitConfig->num_deny_mac > MAX_MAC_ADDRESS_DENIED)
-        num_mac = pConfig->num_deny_mac = MAX_MAC_ADDRESS_DENIED;
+    if (pCommitConfig->num_deny_mac > MAX_ACL_MAC_ADDRESS)
+        num_mac = pConfig->num_deny_mac = MAX_ACL_MAC_ADDRESS;
     else
         num_mac = pConfig->num_deny_mac = pCommitConfig->num_deny_mac;
     acl_entry = pCommitConfig->deny_mac;
@@ -1648,7 +1646,6 @@ int iw_softap_get_channel_list(struct net_device *dev,
     v_U8_t bandEndChannel = RF_CHAN_165;
     v_U32_t temp_num_channels = 0;
     hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
-    hdd_context_t *pHddCtx = WLAN_HDD_GET_CTX(pHostapdAdapter);
     tHalHandle hHal = WLAN_HDD_GET_HAL_CTX(pHostapdAdapter);
     v_REGDOMAIN_t domainIdCurrentSoftap;
     tpChannelListInfo channel_list = (tpChannelListInfo) extra;
@@ -1657,25 +1654,24 @@ int iw_softap_get_channel_list(struct net_device *dev,
     if (eHAL_STATUS_SUCCESS != sme_GetFreqBand(hHal, &curBand))
     {
         hddLog(LOGE,FL("not able get the current frequency band\n"));
-        //return -EIO;
-		curBand = eCSR_BAND_ALL;
+        return -EIO;
     }
     wrqu->data.length = sizeof(tChannelListInfo);
     ENTER();
 
-    if (eCSR_BAND_24 == curBand || eCSR_BAND_24 == pHddCtx->cfg_ini->nBandCapability)
+    if (eCSR_BAND_24 == curBand)
     {
         bandStartChannel = RF_CHAN_1;
         bandEndChannel = RF_CHAN_14;
     }
-    else if (eCSR_BAND_5G == curBand || eCSR_BAND_5G == pHddCtx->cfg_ini->nBandCapability)
+    else if (eCSR_BAND_5G == curBand)
     {
         bandStartChannel = RF_CHAN_36;
         bandEndChannel = RF_CHAN_165;
     }
 
-    hddLog(LOG1, FL("\n nBandCapability = %d, bandStartChannel = %hu, "
-                "bandEndChannel = %hu \n"), pHddCtx->cfg_ini->nBandCapability, 
+    hddLog(LOG1, FL("\n curBand = %d, bandStartChannel = %hu, "
+                "bandEndChannel = %hu "), curBand,
                 bandStartChannel, bandEndChannel );
 
     for( i = bandStartChannel; i <= bandEndChannel; i++ )
@@ -1723,7 +1719,6 @@ int iw_softap_get_channel_list(struct net_device *dev,
     }
 
     channel_list->num_channels = num_channels;
-
     EXIT();
 
     return 0;
@@ -1988,7 +1983,7 @@ static int iw_set_ap_encodeext(struct net_device *dev,
     }
          
     VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
-          ("%s:EncryptionType:%d key_len:%d, :%d, KeyId:%d \n"),__func__, setKey.encType, setKey.keyLength,
+          ("%s:EncryptionType:%d key_len:%d, KeyId:%d"), __func__, setKey.encType, setKey.keyLength,
             setKey.keyId);
     for(i=0; i< ext->key_len; i++)
         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_INFO,
@@ -2629,46 +2624,84 @@ int iw_get_softap_linkspeed(struct net_device *dev,
 
 {
    hdd_adapter_t *pHostapdAdapter = (netdev_priv(dev));
+   hdd_context_t *pHddCtx;
    char *pLinkSpeed = (char*)extra;
-   v_U16_t link_speed;
+   v_U32_t link_speed;
    unsigned short staId;
-   int len = sizeof(v_U16_t)+1;
+   int len = sizeof(v_U32_t)+1;
    v_BYTE_t macAddress[VOS_MAC_ADDR_SIZE];
    VOS_STATUS status;
-   int rc;
+   int rc, valid;
 
-   if ( hdd_string_to_hex ((char *)wrqu->data.pointer, wrqu->data.length, macAddress ) )
+   pHddCtx = WLAN_HDD_GET_CTX(pHostapdAdapter);
+
+   valid = wlan_hdd_validate_context(pHddCtx);
+
+   if (0 != valid)
    {
-      hddLog(VOS_TRACE_LEVEL_FATAL, "ERROR: Command not found");
-      return -EINVAL;
+       hddLog(VOS_TRACE_LEVEL_ERROR, FL("HDD context not valid"));
+       return valid;
    }
 
-   status = hdd_softap_GetStaId(pHostapdAdapter, (v_MACADDR_t *)macAddress, (void *)(&staId));
+   hddLog(VOS_TRACE_LEVEL_INFO, "%s wrqu->data.length= %d\n", __func__, wrqu->data.length);
+   status = hdd_string_to_hex ((char *)wrqu->data.pointer, wrqu->data.length, macAddress );
 
    if (!VOS_IS_STATUS_SUCCESS(status ))
    {
-      VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR, FL("ERROR: HDD Failed to find sta id!!"));
+      hddLog(VOS_TRACE_LEVEL_ERROR, FL("String to Hex conversion Failed"));
+   }
+
+   /* If no mac address is passed and/or its length is less than 18,
+    * link speed for first connected client will be returned.
+    */
+   if (!VOS_IS_STATUS_SUCCESS(status ) || wrqu->data.length < 18)
+   {
+      status = hdd_softap_GetConnectedStaId(pHostapdAdapter, (void *)(&staId));
+   }
+   else
+   {
+      status = hdd_softap_GetStaId(pHostapdAdapter,
+                               (v_MACADDR_t *)macAddress, (void *)(&staId));
+   }
+
+   if (!VOS_IS_STATUS_SUCCESS(status))
+   {
+      hddLog(VOS_TRACE_LEVEL_ERROR, FL("ERROR: HDD Failed to find sta id!!"));
       link_speed = 0;
    }
    else
    {
       status = wlan_hdd_get_classAstats_for_station(pHostapdAdapter , staId);
+
       if (!VOS_IS_STATUS_SUCCESS(status ))
       {
-          hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Unable to retrieve SME statistics", __func__);
+          hddLog(VOS_TRACE_LEVEL_ERROR, FL("Unable to retrieve SME statistics"));
           return -EINVAL;
       }
-      link_speed =(int)pHostapdAdapter->hdd_stats.ClassA_stat.tx_rate/2;
+
+      WLANTL_GetSTALinkCapacity(pHddCtx->pvosContext,
+                                staId, &link_speed);
+
+      link_speed = link_speed / 10;
+
+      if (0 == link_speed)
+      {
+          /* The linkspeed returned by HAL is in units of 500kbps.
+           * converting it to mbps.
+           * This is required to support legacy firmware which does
+           * not return link capacity.
+           */
+          link_speed =(int)pHostapdAdapter->hdd_stats.ClassA_stat.tx_rate/2;
+      }
    }
 
    wrqu->data.length = len;
-   rc = snprintf(pLinkSpeed, len, "%u", link_speed);
+   rc = snprintf(pLinkSpeed, len, "%lu", link_speed);
+
    if ((rc < 0) || (rc >= len))
    {
       // encoding or length error?
-      hddLog(VOS_TRACE_LEVEL_ERROR,
-            "%s: Unable to encode link speed, got [%s]",
-             __func__, pLinkSpeed);
+      hddLog(VOS_TRACE_LEVEL_ERROR,FL( "Unable to encode link speed"));
       return -EIO;
    }
 
@@ -2790,7 +2823,7 @@ static const struct iw_priv_args hostapd_private_args[] = {
         IW_PRIV_TYPE_BYTE | QCSAP_MAX_WSC_IE, 0, "ap_stats" },
   { QCSAP_IOCTL_PRIV_GET_SOFTAP_LINK_SPEED,
         IW_PRIV_TYPE_CHAR | 18,
-        IW_PRIV_TYPE_CHAR | 3, "getLinkSpeed" },
+        IW_PRIV_TYPE_CHAR | 5, "getLinkSpeed" },
 
   { QCSAP_IOCTL_PRIV_SET_THREE_INT_GET_NONE,
         IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 3, 0, "" },
@@ -2967,8 +3000,24 @@ VOS_STATUS hdd_init_ap_mode( hdd_adapter_t *pAdapter )
     {
        hddLog(VOS_TRACE_LEVEL_FATAL, "%s: hdd_softap_init_tx_rx failed", __func__);
     }
-    
+
+    status = hdd_wmm_adapter_init( pAdapter );
+    if (!VOS_IS_STATUS_SUCCESS(status))
+    {
+       hddLog(VOS_TRACE_LEVEL_ERROR,
+             "hdd_wmm_adapter_init() failed with status code %08d [x%08lx]",
+                             status, status );
+       goto error_wmm_init;
+    }
+
+    set_bit(WMM_INIT_DONE, &pAdapter->event_flags);
+
     wlan_hdd_set_monitor_tx_adapter( WLAN_HDD_GET_CTX(pAdapter), pAdapter );
+
+    return status;
+
+error_wmm_init:
+    hdd_softap_deinit_tx_rx( pAdapter );
     EXIT();
     return status;
 }

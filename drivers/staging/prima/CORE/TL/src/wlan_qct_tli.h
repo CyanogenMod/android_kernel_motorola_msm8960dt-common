@@ -39,6 +39,7 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
+
 #ifndef WLAN_QCT_TLI_H
 #define WLAN_QCT_TLI_H
 
@@ -52,8 +53,6 @@ DESCRIPTION
   This file contains the internal declarations used within wlan transport
   layer module.
 
-  Copyright (c) 2008 QUALCOMM Incorporated. All Rights Reserved.
-  Qualcomm Confidential and Proprietary
 ===========================================================================*/
 
 
@@ -454,6 +453,8 @@ typedef struct
   WLANTL_TIMER_EXPIER_UDATA_T timerUdata;
 
   WLANTL_REORDER_BUFFER_T     *reorderBuffer;
+
+  v_U16_t            LastSN;
 }WLANTL_BAReorderType;
 
 
@@ -638,6 +639,8 @@ typedef struct
     1 then we have to encrypt the data irrespective of TL
     state (CONNECTED/AUTHENTICATED) */
   v_U8_t ptkInstalled;
+
+  v_U32_t       linkCapacity;
 }WLANTL_STAClientType;
 
 /*---------------------------------------------------------------------------
