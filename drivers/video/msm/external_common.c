@@ -1180,7 +1180,7 @@ static void hdmi_edid_extract_speaker_allocation_data(const uint8 *in_buf)
 
 static void hdmi_edid_extract_audio_data_blocks(const uint8 *in_buf)
 {
-	uint8 len;
+	uint8 len = 0;
 	const uint8 *adb = hdmi_edid_find_block(in_buf, DBC_START_OFFSET, 1,
 			&len);
 
@@ -1488,7 +1488,7 @@ static int hdmi_edid_get_display_vsd_3d_mode(const uint8 *data_buf,
 	struct hdmi_disp_mode_list_type *disp_mode_list,
 	uint32 num_og_cea_blocks)
 {
-	uint8 len, offset, present_multi_3d, hdmi_vic_len;
+	uint8 len = 0, offset, present_multi_3d, hdmi_vic_len;
 	int hdmi_3d_len;
 	uint16 structure_all, structure_mask;
 	const uint8 *vsd = num_og_cea_blocks ?
