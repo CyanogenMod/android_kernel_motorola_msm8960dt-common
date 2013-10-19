@@ -579,13 +579,15 @@ static void adreno_cleanup_pt(struct kgsl_device *device,
 
 	kgsl_mmu_unmap(pagetable, &device->memstore);
 
+	kgsl_mmu_unmap(pagetable, &adreno_dev->pwron_fixup);
+
 	kgsl_mmu_unmap(pagetable, &device->mmu.setstate_memory);
 }
 
 static int adreno_setup_pt(struct kgsl_device *device,
 			struct kgsl_pagetable *pagetable)
 {
-	int result = 0;
+	int result;
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct adreno_ringbuffer *rb = &adreno_dev->ringbuffer;
 
@@ -601,9 +603,13 @@ static int adreno_setup_pt(struct kgsl_device *device,
 	if (result)
 		goto unmap_memptrs_desc;
 
-	result = kgsl_mmu_map_global(pagetable, &device->mmu.setstate_memory);
+	result = kgsl_mmu_map_global(pagetable, &adreno_dev->pwron_fixup);
 	if (result)
 		goto unmap_memstore_desc;
+
+	result = kgsl_mmu_map_global(pagetable, &device->mmu.setstate_memory);
+	if (result)
+		goto unmap_pwron_fixup_desc;
 
 	/*
 	 * Set the mpu end to the last "normal" global memory we use.
@@ -612,19 +618,10 @@ static int adreno_setup_pt(struct kgsl_device *device,
 	 */
 	device->mh.mpu_range = device->mmu.setstate_memory.gpuaddr +
 				device->mmu.setstate_memory.size;
-
-	if (adreno_is_a305(adreno_dev)) {
-		result = kgsl_mmu_map_global(pagetable,
-				&adreno_dev->on_resume_cmd);
-		if (result)
-			goto unmap_setstate_desc;
-		device->mh.mpu_range = device->mmu.setstate_memory.gpuaddr +
-				device->mmu.setstate_memory.size;
-	}
 	return result;
 
-unmap_setstate_desc:
-	kgsl_mmu_unmap(pagetable, &device->mmu.setstate_memory);
+unmap_pwron_fixup_desc:
+	kgsl_mmu_unmap(pagetable, &adreno_dev->pwron_fixup);
 
 unmap_memstore_desc:
 	kgsl_mmu_unmap(pagetable, &device->memstore);
@@ -1572,7 +1569,6 @@ adreno_probe(struct platform_device *pdev)
 #ifdef CONFIG_DEBUG_FS
 	adreno_debugfs_init(device);
 #endif
-	adreno_dev->on_resume_issueib = false;
 
 	adreno_ft_init_sysfs(device);
 
@@ -1607,8 +1603,6 @@ static int __devexit adreno_remove(struct platform_device *pdev)
 
 	kgsl_pwrscale_detach_policy(device);
 	kgsl_pwrscale_close(device);
-	if (adreno_is_a305(adreno_dev))
-		kgsl_sharedmem_free(&adreno_dev->on_resume_cmd);
 
 	adreno_ringbuffer_close(&adreno_dev->ringbuffer);
 	kgsl_device_platform_remove(device);
@@ -1689,6 +1683,15 @@ static int adreno_start(struct kgsl_device *device)
 	kgsl_pwrctrl_enable(device);
 
 	/* Set up a2xx special case */
+
+	/* Certain targets need the fixup.  You know who you are */
+	if (adreno_is_a305(adreno_dev) || adreno_is_a320(adreno_dev))
+		adreno_a3xx_pwron_fixup_init(adreno_dev);
+
+	/* Set the bit to indicate that we've just powered on */
+	set_bit(ADRENO_DEVICE_PWRON, &adreno_dev->priv);
+
+	/* Set up the MMU */
 	if (adreno_is_a2xx(adreno_dev)) {
 		/*
 		 * the MH_CLNT_INTF_CTRL_CONFIG registers aren't present
@@ -1715,18 +1718,6 @@ static int adreno_start(struct kgsl_device *device)
 		ft_detect_regs[10] = A3XX_RBBM_PERFCTR_SP_5_LO;
 		ft_detect_regs[11] = A3XX_RBBM_PERFCTR_SP_5_HI;
 	}
-
-	/*
-	 * Allocate some memory for A305 to do an extra draw on resume
-	 * from SLUMBER state.
-	 */
-	if (adreno_is_a305(adreno_dev) &&
-			adreno_dev->on_resume_cmd.hostptr == NULL) {
-		status = kgsl_allocate_contiguous(&adreno_dev->on_resume_cmd,
-					PAGE_SIZE);
-		if (status)
-			goto error_clk_off;
-        }
 
 	status = kgsl_mmu_start(device);
 	if (status)
@@ -3232,8 +3223,6 @@ static int adreno_suspend_context(struct kgsl_device *device)
 		adreno_drawctxt_switch(adreno_dev, NULL, 0);
 		status = adreno_idle(device);
 	}
-	if (adreno_is_a305(adreno_dev))
-		adreno_dev->on_resume_issueib = true;
 
 	return status;
 }
@@ -3291,6 +3280,9 @@ struct kgsl_memdesc *adreno_find_region(struct kgsl_device *device,
 
 	if (kgsl_gpuaddr_in_memdesc(&device->memstore, gpuaddr, size))
 		return &device->memstore;
+
+	if (kgsl_gpuaddr_in_memdesc(&adreno_dev->pwron_fixup, gpuaddr, size))
+		return &adreno_dev->pwron_fixup;
 
 	if (kgsl_gpuaddr_in_memdesc(&device->mmu.setstate_memory, gpuaddr,
 					size))
