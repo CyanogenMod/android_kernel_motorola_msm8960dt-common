@@ -998,12 +998,20 @@ struct hdd_context_s
 
     hdd_traffic_monitor_t traffic_monitor;
 
+    /* MC/BC Filter state variable
+     * This always contains the value that is currently
+     * configured
+     * */
+    v_U8_t configuredMcastBcastFilter;
+
+    v_U8_t sus_res_mcastbcast_filter;
+
+    v_BOOL_t sus_res_mcastbcast_filter_valid;
+
     /* Use below lock to protect access to isSchedScanUpdatePending
      * since it will be accessed in two different contexts.
      */
     spinlock_t schedScan_lock;
-
-    v_U8_t sus_res_mcastbcast_filter;
 
     // Flag keeps track of wiphy suspend/resume
     v_BOOL_t isWiphySuspended;
@@ -1011,11 +1019,6 @@ struct hdd_context_s
     // Indicates about pending sched_scan results
     v_BOOL_t isSchedScanUpdatePending;
 
-    /* MC/BC Filter state variable
-     * This always contains the value that is currently
-     * configured
-     * */
-    v_U8_t configuredMcastBcastFilter;
 };
 
 
