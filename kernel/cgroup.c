@@ -3221,7 +3221,7 @@ int cgroupstats_build(struct cgroupstats *stats, struct dentry *dentry)
 {
 	int ret = -EINVAL;
 	struct cgroup *cgrp;
-	struct cgroup_iter it;
+	struct cgroup_iter it = {0, 0};
 	struct task_struct *tsk;
 
 	/*
