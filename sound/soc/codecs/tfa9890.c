@@ -15,7 +15,7 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
  * 02111-1307, USA
  */
-
+#define DEBUG
 #include <linux/cdev.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -968,6 +968,11 @@ static void tfa9890_dsp_init(struct work_struct *work)
 	int tries = 0;
 
 	mutex_lock(&tfa9890->dsp_init_lock);
+	/*set the cool flux in reset */
+	snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x1);
+	/* power up IC */
+
+	tfa9890_power(codec, 1);
 	/* check if DSP pll is synced, It should be sync'ed at this point */
 	do {
 		val = snd_soc_read(codec, TFA9890_SYS_STATUS_REG);
@@ -980,6 +985,11 @@ static void tfa9890_dsp_init(struct work_struct *work)
 		pr_err("tfa9890:DSP pll sync failed!!");
 		goto out;
 	}
+	/* wait additional 3msec for PLL to be stable */
+	usleep_range(3000, 3000);
+
+	/* take DSP out of reset */
+	snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x0);
 
 	pr_info("tfa9890: Initializing DSP, status:0x%x", val);
 
@@ -1015,7 +1025,13 @@ static void tfa9890_dsp_init(struct work_struct *work)
 	mutex_unlock(&tfa9890->dsp_init_lock);
 	return;
 out:
-	tfa9890->dsp_init = TFA9890_DSP_INIT_FAIL;
+	/* retry firmware load failure, according to NXP
+	 * due to PLL instability firmware loading could corrupt
+	 * DSP memory, putting the dsp in reset and adding additional
+	 * delay should avoid this situation, but its safe retry loading
+	 * all fimrware file again if we detect failure here.
+	 */
+	tfa9890->dsp_init = TFA9890_DSP_INIT_PENDING;
 	mutex_unlock(&tfa9890->dsp_init_lock);
 }
 
@@ -1185,10 +1201,15 @@ static int tfa9890_startup(struct snd_pcm_substream *substream,
 				   struct snd_soc_dai *dai)
 {
 	struct snd_soc_codec *codec = dai->codec;
+	struct tfa9890_priv *tfa9890 = snd_soc_codec_get_drvdata(dai->codec);
 
 	pr_debug("%s: enter\n", __func__);
-
-	tfa9890_power(codec, 1);
+	/* power up IC here only on warm start, if the initialization
+	 * is still pending the DSP will be put in reset and powered
+	 * up ater firmware load in the init function.
+	 */
+	if (tfa9890->dsp_init == TFA9890_DSP_INIT_DONE)
+		tfa9890_power(codec, 1);
 
 	return 0;
 }
