@@ -133,12 +133,18 @@ static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
 	if (p->alloc_mode == SSR) {
 		p->gc_mode = GC_GREEDY;
 		p->dirty_segmap = dirty_i->dirty_segmap[type];
+		p->max_search = dirty_i->nr_dirty[type];
 		p->ofs_unit = 1;
 	} else {
 		p->gc_mode = select_gc_type(gc_type);
 		p->dirty_segmap = dirty_i->dirty_segmap[DIRTY];
+		p->max_search = dirty_i->nr_dirty[DIRTY];
 		p->ofs_unit = sbi->segs_per_sec;
 	}
+
+	if (p->max_search > MAX_VICTIM_SEARCH)
+		p->max_search = MAX_VICTIM_SEARCH;
+
 	p->offset = sbi->last_victim[p->gc_mode];
 }
 
@@ -285,7 +291,7 @@ static int get_victim_by_default(struct f2fs_sb_info *sbi,
 		if (cost == max_cost)
 			continue;
 
-		if (nsearched++ >= MAX_VICTIM_SEARCH) {
+		if (nsearched++ >= p.max_search) {
 			sbi->last_victim[p.gc_mode] = segno;
 			break;
 		}
@@ -402,8 +408,7 @@ next_step:
 
 		/* set page dirty and write it */
 		if (gc_type == FG_GC) {
-			f2fs_submit_bio(sbi, NODE, true);
-			wait_on_page_writeback(node_page);
+			f2fs_wait_on_page_writeback(node_page, NODE, true);
 			set_page_dirty(node_page);
 		} else {
 			if (!PageWriteback(node_page))
@@ -442,7 +447,7 @@ next_step:
  * as indirect or double indirect node blocks, are given, it must be a caller's
  * bug.
  */
-block_t start_bidx_of_node(unsigned int node_ofs)
+block_t start_bidx_of_node(unsigned int node_ofs, struct f2fs_inode_info *fi)
 {
 	unsigned int indirect_blks = 2 * NIDS_PER_BLOCK + 4;
 	unsigned int bidx;
@@ -459,7 +464,7 @@ block_t start_bidx_of_node(unsigned int node_ofs)
 		int dec = (node_ofs - indirect_blks - 3) / (NIDS_PER_BLOCK + 1);
 		bidx = node_ofs - 5 - dec;
 	}
-	return bidx * ADDRS_PER_BLOCK + ADDRS_PER_INODE;
+	return bidx * ADDRS_PER_BLOCK + ADDRS_PER_INODE(fi);
 }
 
 static int check_dnode(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
@@ -503,10 +508,7 @@ static void move_data_page(struct inode *inode, struct page *page, int gc_type)
 	} else {
 		struct f2fs_sb_info *sbi = F2FS_SB(inode->i_sb);
 
-		if (PageWriteback(page)) {
-			f2fs_submit_bio(sbi, DATA, true);
-			wait_on_page_writeback(page);
-		}
+		f2fs_wait_on_page_writeback(page, DATA, true);
 
 		if (clear_page_dirty_for_io(page) &&
 			S_ISDIR(inode->i_mode)) {
@@ -570,13 +572,14 @@ next_step:
 			continue;
 		}
 
-		start_bidx = start_bidx_of_node(nofs);
 		ofs_in_node = le16_to_cpu(entry->ofs_in_node);
 
 		if (phase == 2) {
 			inode = f2fs_iget(sb, dni.ino);
 			if (IS_ERR(inode))
 				continue;
+
+			start_bidx = start_bidx_of_node(nofs, F2FS_I(inode));
 
 			data_page = find_data_page(inode,
 					start_bidx + ofs_in_node, false);
@@ -588,6 +591,8 @@ next_step:
 		} else {
 			inode = find_gc_inode(dni.ino, ilist);
 			if (inode) {
+				start_bidx = start_bidx_of_node(nofs,
+								F2FS_I(inode));
 				data_page = get_lock_data_page(inode,
 						start_bidx + ofs_in_node);
 				if (IS_ERR(data_page))
