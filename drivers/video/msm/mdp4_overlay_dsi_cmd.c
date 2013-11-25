@@ -836,7 +836,7 @@ void mdp4_mipi_vsync_enable(struct msm_fb_data_type *mfd,
 	tear_en = (1 << which);
 
 	mdp_clk_ctrl(1);
-	if ((mfd->use_mdp_vsync) && (mfd->ibuf.vsync_enable) &&
+	if ((mfd->use_mdp_vsync) &&
 		(mfd->panel_info.lcd.vsync_enable)) {
 		u32 temp;
 
