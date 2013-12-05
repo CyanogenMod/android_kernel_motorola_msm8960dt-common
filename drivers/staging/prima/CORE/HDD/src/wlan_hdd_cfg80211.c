@@ -976,9 +976,6 @@ int wlan_hdd_cfg80211_alloc_new_beacon(hdd_adapter_t *pAdapter,
     if (!params->head && !old)
         return -EINVAL;
 
-    if (params->tail && !params->tail_len)
-        return -EINVAL;
-
 #if (LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,38))
     /* Kernel 3.0 is not updating dtim_period for set beacon */
     if (!params->dtim_period)
@@ -5537,9 +5534,7 @@ int wlan_hdd_cfg80211_set_ie( hdd_adapter_t *pAdapter,
                     pWextState->roamProfile.nWPAReqIELength = eLen + 2;//ie_len;
                 }
                 else if ( (0 == memcmp(&genie[0], P2P_OUI_TYPE,
-                                                         P2P_OUI_TYPE_SIZE))
-                        /*Consider P2P IE, only for P2P Client */
-                         && (WLAN_HDD_P2P_CLIENT == pAdapter->device_mode) )
+                                                         P2P_OUI_TYPE_SIZE)))
                 {
                     v_U16_t curAddIELen = pWextState->assocAddIE.length;
                     hddLog (VOS_TRACE_LEVEL_INFO, "%s Set P2P IE(len %d)",
@@ -6727,10 +6722,12 @@ static int wlan_hdd_cfg80211_get_station(struct wiphy *wiphy, struct net_device 
             /* Update MAX rate */
             maxRate = (currentRate > maxRate)?currentRate:maxRate;
         }
-        /* Get MCS Rate Set -- but only if we are connected at MCS
-           rates or if we are always reporting max speed or if we have
-           good rssi */
-        if ((0 == rssidx) && !(rate_flags & eHAL_TX_RATE_LEGACY))
+        /* Get MCS Rate Set --
+           only if we are connected at MCS rates (or)
+           if we are always reporting max speed  (or)
+           if we have good rssi */
+         if (((0 == rssidx) && !(rate_flags & eHAL_TX_RATE_LEGACY)) ||
+              (eHDD_LINK_SPEED_REPORT_MAX == pCfg->reportMaxLinkSpeed))
         {
             if (0 != ccmCfgGetStr(WLAN_HDD_GET_HAL_CTX(pAdapter), WNI_CFG_CURRENT_MCS_SET,
                                  MCSRates, &MCSLeng))
