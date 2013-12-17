@@ -635,10 +635,13 @@ int wlan_hdd_cfg80211_init(struct device *dev,
                  |  WIPHY_FLAG_TDLS_EXTERNAL_SETUP;
 #endif
 #ifdef FEATURE_WLAN_SCAN_PNO
-    wiphy->flags |= WIPHY_FLAG_SUPPORTS_SCHED_SCAN;
-    wiphy->max_sched_scan_ssids = SIR_PNO_MAX_SUPP_NETWORKS;
-    wiphy->max_match_sets       = SIR_PNO_MAX_SUPP_NETWORKS;
-    wiphy->max_sched_scan_ie_len = SIR_MAC_MAX_IE_LENGTH;
+    if (pCfg->configPNOScanSupport)
+    {
+        wiphy->flags |= WIPHY_FLAG_SUPPORTS_SCHED_SCAN;
+        wiphy->max_sched_scan_ssids = SIR_PNO_MAX_SUPP_NETWORKS;
+        wiphy->max_match_sets       = SIR_PNO_MAX_SUPP_NETWORKS;
+        wiphy->max_sched_scan_ie_len = SIR_MAC_MAX_IE_LENGTH;
+    }
 #endif/*FEATURE_WLAN_SCAN_PNO*/
 
     /* even with WIPHY_FLAG_CUSTOM_REGULATORY,
@@ -1789,7 +1792,15 @@ static int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
     {
         pIe = wlan_hdd_cfg80211_get_ie_ptr(pBeacon->tail, pBeacon->tail_len,
                                        WLAN_EID_COUNTRY);
-        if(pIe)
+        if(memcmp(pHddCtx->cfg_ini->apCntryCode, CFG_AP_COUNTRY_CODE_DEFAULT, 3) != 0)
+        {
+           tANI_BOOLEAN restartNeeded;
+           pConfig->ieee80211d = 1;
+           vos_mem_copy(pConfig->countryCode, pHddCtx->cfg_ini->apCntryCode, 3);
+           sme_setRegInfo(hHal, pConfig->countryCode);
+           sme_ResetCountryCodeInformation(hHal, &restartNeeded);
+        }
+        else if(pIe)
         {
             tANI_BOOLEAN restartNeeded;
             pConfig->ieee80211d = 1;
@@ -2114,6 +2125,7 @@ static int wlan_hdd_cfg80211_start_bss(hdd_adapter_t *pHostapdAdapter,
     {
         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
                  ("ERROR: HDD vos wait for single_event failed!!\n"));
+        smeGetCommandQStatus(hHal);
         VOS_ASSERT(0);
     }
 
@@ -2787,7 +2799,8 @@ int wlan_hdd_cfg80211_change_iface( struct wiphy *wiphy,
                                      (void *)(tSmeChangeCountryCallback)
                                       wlan_hdd_change_country_code_cb,
                                       pConfig->apCntryCode, pAdapter,
-                                      pHddCtx->pvosContext);
+                                      pHddCtx->pvosContext,
+                                      eSIR_TRUE);
                     if (eHAL_STATUS_SUCCESS == status)
                     {
                         /* Wait for completion */
