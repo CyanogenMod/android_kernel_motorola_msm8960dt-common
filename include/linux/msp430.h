@@ -111,6 +111,10 @@
 		_IOR(MSP430_IOCTL_BASE, 44, char*)
 #define MSP430_IOCTL_GET_AOD_INSTRUMENTATION_REG	\
 		_IOR(MSP430_IOCTL_BASE, 45, char*)
+#define MSP430_IOCTL_WRITE_REG \
+		_IOR(MSP430_IOCTL_BASE, 46, char*)
+#define MSP430_IOCTL_READ_REG \
+		_IOR(MSP430_IOCTL_BASE, 47, char*)
 
 #define FW_VERSION_SIZE 12
 #define MSP_CONTROL_REG_SIZE 200
@@ -171,6 +175,7 @@ struct msp430_platform_data {
 #define M_STOWED		0x0400
 #define M_CAMERA_ACT	0x0800
 #define M_NFC			0x1000
+#define M_SIM			0x2000
 #define M_LOG_MSG		0x8000
 
 /* algo config mask */
@@ -181,6 +186,9 @@ struct msp430_platform_data {
 #define M_ALGO_STOWED           0x0020
 #define M_ALGO_ACCUM_MODALITY   0x0040
 #define M_ALGO_ACCUM_MVMT       0x0080
+
+/* generic interrupt mask */
+#define M_GENERIC_INTRPT        0x0080
 
 /* algo index */
 #define MSP_IDX_MODALITY        0
@@ -200,6 +208,9 @@ struct msp430_android_sensor_data {
 	signed short data1;
 	signed short data2;
 	signed short data3;
+	signed short data4;
+	signed short data5;
+	signed short data6;
 	unsigned char type;
 	unsigned char status;
 };
@@ -237,7 +248,9 @@ enum MSP430_data_types {
 	DT_NFC,
 	DT_ALGO_EVT,
 	DT_ACCUM_MVMT,
-	DT_RESET
+	DT_SIM,
+	DT_RESET,
+	DT_GENERIC_INT
 };
 
 enum {

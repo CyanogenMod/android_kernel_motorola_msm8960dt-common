@@ -98,8 +98,13 @@ Cleaning Overhead
 MOUNT OPTIONS
 ================================================================================
 
-background_gc_off      Turn off cleaning operations, namely garbage collection,
-		       triggered in background when I/O subsystem is idle.
+background_gc=%s       Turn on/off cleaning operations, namely garbage
+                       collection, triggered in background when I/O subsystem is
+                       idle. If background_gc=on, it will turn on the garbage
+                       collection and if background_gc=off, garbage collection
+                       will be truned off.
+                       Default value for this option is on. So garbage
+                       collection is on by default.
 disable_roll_forward   Disable the roll-forward recovery routine
 discard                Issue discard/TRIM commands when a segment is cleaned.
 no_heap                Disable heap-style segment allocation which finds free
@@ -126,6 +131,38 @@ f2fs. Each file shows the whole f2fs information.
  - major file system information managed by f2fs currently
  - average SIT information about whole segments
  - current memory footprint consumed by f2fs.
+
+================================================================================
+SYSFS ENTRIES
+================================================================================
+
+Information about mounted f2f2 file systems can be found in
+/sys/fs/f2fs.  Each mounted filesystem will have a directory in
+/sys/fs/f2fs based on its device name (i.e., /sys/fs/f2fs/sda).
+The files in each per-device directory are shown in table below.
+
+Files in /sys/fs/f2fs/<devname>
+(see also Documentation/ABI/testing/sysfs-fs-f2fs)
+..............................................................................
+ File                         Content
+
+ gc_max_sleep_time            This tuning parameter controls the maximum sleep
+                              time for the garbage collection thread. Time is
+                              in milliseconds.
+
+ gc_min_sleep_time            This tuning parameter controls the minimum sleep
+                              time for the garbage collection thread. Time is
+                              in milliseconds.
+
+ gc_no_gc_sleep_time          This tuning parameter controls the default sleep
+                              time for the garbage collection thread. Time is
+                              in milliseconds.
+
+ gc_idle                      This parameter controls the selection of victim
+                              policy for garbage collection. Setting gc_idle = 0
+                              (default) will disable this option. Setting
+                              gc_idle = 1 will select the Cost Benefit approach
+                              & setting gc_idle = 2 will select the greedy aproach.
 
 ================================================================================
 USAGE

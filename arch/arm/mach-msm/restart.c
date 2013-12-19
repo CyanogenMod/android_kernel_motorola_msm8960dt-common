@@ -201,7 +201,7 @@ static void set_restart_reason(unsigned reason)
 	 * to pmic also */
 	if (!cpu_is_msm8960() &&
 	    (reason >= REBOOT_MIN) && (reason <= REBOOT_MAX))
-		pm8xxx_hw_reset_debounce_timer_set(reason - REBOOT_MIN + 1);
+		pm8xxx_cal_rc1_rsv_set(reason - REBOOT_MIN + 1);
 }
 
 struct work_struct msm_resout_work;
@@ -348,7 +348,7 @@ static int __init msm_pmic_restart_init(void)
 
 	if (pmic_reset_irq != 0) {
 		rc = request_any_context_irq(pmic_reset_irq,
-					resout_irq_handler, IRQF_TRIGGER_HIGH,
+					resout_irq_handler, IRQF_TRIGGER_RISING,
 					"restart_from_pmic", NULL);
 		if (rc < 0)
 			pr_err("pmic restart irq fail rc = %d\n", rc);

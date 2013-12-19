@@ -503,7 +503,12 @@ static void truncate_node(struct dnode_of_data *dn)
 
 	get_node_info(sbi, dn->nid, &ni);
 	if (dn->inode->i_blocks == 0) {
-		BUG_ON(ni.blk_addr != NULL_ADDR);
+		if (ni.blk_addr != NULL_ADDR) {
+			f2fs_msg(sbi->sb, KERN_ERR,
+					"empty node still has block address %u ",
+					ni.blk_addr);
+			f2fs_handle_error(sbi);
+		}
 		goto invalidate;
 	}
 	BUG_ON(ni.blk_addr == NULL_ADDR);
@@ -832,7 +837,11 @@ int remove_inode_page(struct inode *inode)
 	}
 
 	/* 0 is possible, after f2fs_new_inode() is failed */
-	BUG_ON(inode->i_blocks != 0 && inode->i_blocks != 1);
+	if (inode->i_blocks != 0 && inode->i_blocks != 1) {
+		f2fs_msg(sbi->sb, KERN_ERR, "inode %u still has %llu blocks",
+				ino, inode->i_blocks);
+		f2fs_handle_error(sbi);
+	}
 	set_new_dnode(&dn, inode, page, page, ino);
 	truncate_node(&dn);
 	return 0;
@@ -1172,6 +1181,9 @@ static int f2fs_write_node_page(struct page *page,
 	block_t new_addr;
 	struct node_info ni;
 
+	if (sbi->por_doing)
+		goto redirty_out;
+
 	wait_on_page_writeback(page);
 
 	/* get old block addr of this node page */
@@ -1187,12 +1199,8 @@ static int f2fs_write_node_page(struct page *page,
 		return 0;
 	}
 
-	if (wbc->for_reclaim) {
-		dec_page_count(sbi, F2FS_DIRTY_NODES);
-		wbc->pages_skipped++;
-		set_page_dirty(page);
-		return AOP_WRITEPAGE_ACTIVATE;
-	}
+	if (wbc->for_reclaim)
+		goto redirty_out;
 
 	mutex_lock(&sbi->node_write);
 	set_page_writeback(page);
@@ -1202,6 +1210,12 @@ static int f2fs_write_node_page(struct page *page,
 	mutex_unlock(&sbi->node_write);
 	unlock_page(page);
 	return 0;
+
+redirty_out:
+	dec_page_count(sbi, F2FS_DIRTY_NODES);
+	wbc->pages_skipped++;
+	set_page_dirty(page);
+	return AOP_WRITEPAGE_ACTIVATE;
 }
 
 /*

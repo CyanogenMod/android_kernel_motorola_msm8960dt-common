@@ -2016,6 +2016,7 @@ static void backup_soc_and_iavg(struct pm8921_bms_chip *chip, int batt_temp,
 				int soc)
 {
 	u8 temp;
+#ifndef CONFIG_PM8921_EXTENDED_INFO
 	int iavg_ma = chip->prev_uuc_iavg_ma;
 
 	if (iavg_ma > IAVG_START)
@@ -2025,6 +2026,7 @@ static void backup_soc_and_iavg(struct pm8921_bms_chip *chip, int batt_temp,
 
 	pm_bms_masked_write(chip, TEMP_IAVG_STORAGE,
 			TEMP_IAVG_STORAGE_USE_MASK, temp);
+#endif
 
 	/* since only 6 bits are available for SOC, we store half the soc */
 	if (soc == 0)
@@ -2042,6 +2044,7 @@ static void read_shutdown_soc_and_iavg(struct pm8921_bms_chip *chip)
 	int rc;
 	u8 temp;
 
+#ifndef CONFIG_PM8921_EXTENDED_INFO
 	rc = pm8xxx_readb(chip->dev->parent, TEMP_IAVG_STORAGE, &temp);
 	if (rc) {
 		pr_err("failed to read addr = %d %d assuming %d\n",
@@ -2057,6 +2060,9 @@ static void read_shutdown_soc_and_iavg(struct pm8921_bms_chip *chip)
 					+ IAVG_STEP_SIZE_MA * (temp + 1);
 		}
 	}
+#else
+	chip->shutdown_iavg_ua = 0;
+#endif
 
 	rc = pm8xxx_readb(chip->dev->parent, TEMP_SOC_STORAGE, &temp);
 	if (rc) {
@@ -2342,7 +2348,6 @@ static int calculate_state_of_charge(struct pm8921_bms_chip *chip,
 		return last_soc;
 #endif
 
-	calib_hkadc_check(chip, batt_temp);
 	calculate_soc_params(chip, raw, batt_temp, chargecycles,
 						&fcc_uah,
 						&unusable_charge_uah,
@@ -2496,6 +2501,7 @@ static int recalculate_soc(struct pm8921_bms_chip *chip)
 	get_batt_temp(chip, &batt_temp);
 
 	mutex_lock(&chip->last_ocv_uv_mutex);
+	calib_hkadc_check(chip, batt_temp);
 	read_soc_params_raw(chip, &raw, batt_temp);
 
 	soc = calculate_state_of_charge(chip, &raw,
@@ -2758,6 +2764,7 @@ void pm8921_bms_charging_began(void)
 	get_batt_temp(the_chip, &batt_temp);
 
 	mutex_lock(&the_chip->last_ocv_uv_mutex);
+	calib_hkadc_check(the_chip, batt_temp);
 	read_soc_params_raw(the_chip, &raw, batt_temp);
 	mutex_unlock(&the_chip->last_ocv_uv_mutex);
 
@@ -2798,6 +2805,7 @@ void pm8921_bms_charging_end(int is_battery_full)
 
 	mutex_lock(&the_chip->last_ocv_uv_mutex);
 
+	calib_hkadc_check(the_chip, batt_temp);
 	read_soc_params_raw(the_chip, &raw, batt_temp);
 
 	calculate_cc_uah(the_chip, raw.cc, &bms_end_cc_uah);
@@ -3184,17 +3192,6 @@ desay:
 		return 0;
 }
 
-enum bms_request_operation {
-	CALC_FCC,
-	CALC_PC,
-	CALC_SOC,
-	CALIB_HKADC,
-	CALIB_CCADC,
-	GET_VBAT_VSENSE_SIMULTANEOUS,
-	STOP_OCV,
-	START_OCV,
-};
-
 static int test_batt_temp = 5;
 static int test_chargecycle = 150;
 static int test_ocv = 3900000;
@@ -3308,6 +3305,20 @@ static int set_calc(void *data, u64 val)
 	return ret;
 }
 DEFINE_SIMPLE_ATTRIBUTE(calc_fops, get_calc, set_calc, "%llu\n");
+
+void pm8921_bms_control_ocv_updates(enum bms_request_operation ctrl_ocv)
+{
+	switch (ctrl_ocv) {
+	case STOP_OCV:
+		pm8921_bms_stop_ocv_updates();
+		break;
+	case START_OCV:
+		pm8921_bms_start_ocv_updates();
+		break;
+	default:
+		break;
+	}
+}
 
 static int get_reading(void *data, u64 * val)
 {

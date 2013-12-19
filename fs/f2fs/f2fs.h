@@ -356,6 +356,7 @@ enum page_type {
 
 struct f2fs_sb_info {
 	struct super_block *sb;			/* pointer to VFS super block */
+	struct proc_dir_entry *s_proc;		/* proc entry */
 	struct buffer_head *raw_super_buf;	/* buffer head of raw sb */
 	struct f2fs_super_block *raw_super;	/* raw super block pointer */
 	int s_dirty;				/* dirty flag for checkpoint */
@@ -435,6 +436,12 @@ struct f2fs_sb_info {
 #endif
 	unsigned int last_victim[2];		/* last victim segment # */
 	spinlock_t stat_lock;			/* lock for stat operations */
+
+	/* For sysfs suppport */
+	struct kobject s_kobj;
+	struct completion s_kobj_unregister;
+
+	/* For Android sdcard emulation */
 	u32 android_emu_uid;
 	u32 android_emu_gid;
 	umode_t android_emu_mode;
@@ -962,6 +969,14 @@ static inline int cond_clear_inode_flag(struct f2fs_inode_info *fi, int flag)
 	return 0;
 }
 
+int f2fs_android_emu(struct f2fs_sb_info *, struct inode *, u32 *, u32 *,
+		umode_t *);
+
+#define IS_ANDROID_EMU(sbi, fi, pfi)					\
+	(test_opt((sbi), ANDROID_EMU) &&				\
+	 (((fi)->i_advise & FADVISE_ANDROID_EMU) ||			\
+	  ((pfi)->i_advise & FADVISE_ANDROID_EMU)))
+
 static inline void get_inline_info(struct f2fs_inode_info *fi,
 					struct f2fs_inode *ri)
 {
@@ -1000,14 +1015,6 @@ static inline int inline_xattr_size(struct inode *inode)
 	else
 		return 0;
 }
-
-int f2fs_android_emu(struct f2fs_sb_info *, struct inode *, u32 *, u32 *,
-		umode_t *);
-
-#define IS_ANDROID_EMU(sbi, fi, pfi)					\
-	(test_opt((sbi), ANDROID_EMU) &&				\
-	 (((fi)->i_advise & FADVISE_ANDROID_EMU) ||			\
-	  ((pfi)->i_advise & FADVISE_ANDROID_EMU)))
 
 static inline int f2fs_readonly(struct super_block *sb)
 {

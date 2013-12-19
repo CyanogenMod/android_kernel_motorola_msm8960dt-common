@@ -39,6 +39,7 @@
 
 #define DRIVER_NAME "synaptics_dsx_i2c"
 #define INPUT_PHYS_NAME "synaptics_dsx_i2c/input0"
+#define TYPE_B_PROTOCOL
 
 #define NO_0D_WHILE_2D
 /*
@@ -326,6 +327,8 @@ struct synaptics_dsx_hob {
 static struct synaptics_dsx_hob hob_data;
 static unsigned char tsb_buff_clean_flag = 1;
 static unsigned char collect_resume_info_toggle;
+static unsigned char is_palm_detect;
+static unsigned char touch_down;
 
 #define LAST_SUBPACKET_ROW_IND_MASK 0x80
 #define NR_SUBPKT_PRESENCE_BITS 7
@@ -574,6 +577,7 @@ static struct synaptics_dsx_platform_data *
 	struct synaptics_dsx_platform_data *pdata;
 	struct device_node *np = client->dev.of_node;
 	struct synaptics_dsx_cap_button_map *button_map = NULL;
+	unsigned int palm_data[5];
 
 	pdata = devm_kzalloc(&client->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata) {
@@ -664,6 +668,23 @@ static struct synaptics_dsx_platform_data *
 		rmi4_data->hw_reset = true;
 	}
 
+	if (!of_property_read_u32_array(np, "synaptics,palm-data-info",
+							palm_data, 5)) {
+		pr_notice("using palm suppression\n");
+		rmi4_data->palm_suppression_enabled = true;
+		rmi4_data->palm_data.palm_size_threshold = palm_data[0];
+		rmi4_data->palm_data.x_min_edge = palm_data[1];
+		rmi4_data->palm_data.x_max_edge = palm_data[2];
+		rmi4_data->palm_data.y_min_edge = palm_data[3];
+		rmi4_data->palm_data.y_max_edge = palm_data[4];
+		pr_notice("threshold:%d,x:min%d,max:%d,y:min:%d,max:%d",
+			rmi4_data->palm_data.palm_size_threshold,
+			rmi4_data->palm_data.x_min_edge,
+			rmi4_data->palm_data.x_max_edge,
+			rmi4_data->palm_data.y_min_edge,
+			rmi4_data->palm_data.y_max_edge);
+	}
+
 	return pdata;
 }
 #else
@@ -682,7 +703,8 @@ static int synaptics_rmi4_i2c_write(struct synaptics_rmi4_data *rmi4_data,
 		unsigned short addr, unsigned char *data,
 		unsigned short length);
 
-static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data);
+static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char *f01_cmd_base_addr);
 
 static void synaptics_rmi4_sensor_sleep(struct synaptics_rmi4_data *rmi4_data);
 
@@ -690,6 +712,8 @@ static void synaptics_rmi4_sensor_wake(struct synaptics_rmi4_data *rmi4_data);
 
 static void synaptics_rmi4_sensor_one_touch(
 		struct synaptics_rmi4_data *rmi4_data, bool enable);
+
+static void synaptics_dsx_release_all(struct synaptics_rmi4_data *rmi4_data);
 
 static void synaptics_rmi4_sensor_multi_touch(
 		struct synaptics_rmi4_data *rmi4_data, unsigned char function);
@@ -1142,7 +1166,7 @@ static ssize_t synaptics_rmi4_f01_reset_store(struct device *dev,
 	if (reset != 1)
 		return -EINVAL;
 
-	retval = synaptics_rmi4_reset_device(rmi4_data);
+	retval = synaptics_rmi4_reset_device(rmi4_data, NULL);
 	if (retval < 0) {
 		dev_err(dev,
 				"%s: Failed to issue reset command, error = %d\n",
@@ -1575,11 +1599,14 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	unsigned char finger_data[F12_STD_DATA_LEN];
 	unsigned short data_addr;
 	unsigned short data_size;
-	int x;
-	int y;
-	int p;
-	int w;
-	int id;
+	int x = 0;
+	int y = 0;
+	int p = 0;
+	int w = 0;
+	int id = 0;
+	int wx;
+	int wy;
+	int touch_size;
 
 	fingers_supported = fhandler->num_of_data_points;
 	data_addr = fhandler->full_addr.data_base;
@@ -1611,19 +1638,65 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 
 	for (finger = 0; finger < fingers_supported; finger++,
 			 index += fhandler->size_of_data_register_block) {
+		if (finger_data[index] != 0) {
+			/* palm detected, suppress the touch down events */
+			if (rmi4_data->palm_suppression_enabled
+				&& is_palm_detect == true)
+				return touch_count;
+
+			x = finger_data[index+1] | (finger_data[index+2] << 8);
+			y = finger_data[index+3] | (finger_data[index+4] << 8);
+			p = finger_data[index+5];
+			w = p;
+			id = finger;
+
+			if (rmi4_data->board->x_flip)
+				x = rmi4_data->sensor_max_x - x;
+			if (rmi4_data->board->y_flip)
+				y = rmi4_data->sensor_max_y - y;
+
+			if (rmi4_data->palm_suppression_enabled) {
+				struct palm_data_info *palmd =
+					&rmi4_data->palm_data;
+
+				wx = finger_data[index+6];
+				wy = finger_data[index+7];
+				/*
+				*some Touch IC has problem to report width(x) or
+				* width(y) at edge, workaround to set it as 0
+				*/
+				if (x < palmd->x_min_edge
+					|| x > palmd->x_max_edge)
+					wx = 0;
+				if (y < palmd->y_min_edge
+					|| y > palmd->y_max_edge)
+					wy = 0;
+				touch_size = max(wx, wy);
+				if (touch_size > palmd->palm_size_threshold) {
+					is_palm_detect = true;
+					/*
+					 *when touch_down is true, means there
+					 *are some small touch events beforehand
+					 *and still in down status, release
+					 *these touch events as IC does
+					 */
+					if (touch_down == true)
+						synaptics_dsx_release_all(
+							rmi4_data);
+					return touch_count;
+				}
+			}
+		}
+
+#ifdef TYPE_B_PROTOCOL
+		if (is_palm_detect == false) {
+			input_mt_slot(rmi4_data->input_dev, finger);
+			input_mt_report_slot_state(rmi4_data->input_dev,
+				MT_TOOL_FINGER, finger_data[index] != 0);
+		}
+#endif
 		if (finger_data[index] == 0)
 			continue;
-
-		x = finger_data[index+1] | (finger_data[index+2] << 8);
-		y = finger_data[index+3] | (finger_data[index+4] << 8);
-		p = finger_data[index+5];
-		w = finger_data[index+5];
-		id = finger;
-
-		if (rmi4_data->board->x_flip)
-			x = rmi4_data->sensor_max_x - x;
-		if (rmi4_data->board->y_flip)
-			y = rmi4_data->sensor_max_y - y;
 
 		dev_dbg(&rmi4_data->i2c_client->dev,
 					"%s: Finger %d:\n"
@@ -1642,10 +1715,13 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 					ABS_MT_PRESSURE, p);
 		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_TOUCH_MAJOR, w);
+#ifndef TYPE_B_PROTOCOL
 		input_report_abs(rmi4_data->input_dev,
 					ABS_MT_TRACKING_ID, id);
 		input_mt_sync(rmi4_data->input_dev);
+#endif
 		touch_count++;
+		touch_down = true;
 
 		if (collect_resume_info_toggle == true &&
 			rmi4_data->number_resumes > 0 &&
@@ -1653,10 +1729,17 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			getnstimeofday(&(tmp_resume_i->send_touch));
 	}
 
-	if (!touch_count)
+	if (!touch_count) {
+		touch_down = false;
+#ifndef TYPE_B_PROTOCOL
 		input_mt_sync(rmi4_data->input_dev);
+#endif
+	}
 
-	input_sync(rmi4_data->input_dev);
+	if (is_palm_detect == false)
+		input_sync(rmi4_data->input_dev);
+	else if (!touch_count)
+		is_palm_detect = false;
 
 	return touch_count;
 }
@@ -2387,12 +2470,17 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 			ABS_MT_TOUCH_MAJOR, 0,
 			255, 0, 0);
 #endif
+#ifdef TYPE_B_PROTOCOL
+	input_mt_init_slots(rmi4_data->input_dev,
+			rmi4_data->num_of_fingers);
+#else
 	input_set_abs_params(rmi4_data->input_dev,
 			ABS_MT_TRACKING_ID, 0,
 			rmi4_data->num_of_fingers - 1, 0, 0);
 
 	/* FIXME replace hard coded value with querying */
 	input_set_events_per_packet(rmi4_data->input_dev, 64);
+#endif
 
 	return retval;
 }
@@ -2817,13 +2905,22 @@ static void synaptics_rmi4_cleanup(struct synaptics_rmi4_data *rmi4_data)
 	}
 }
 
-static void synaptics_dsx_on_resume(struct synaptics_rmi4_data *rmi4_data)
+static void synaptics_dsx_release_all(struct synaptics_rmi4_data *rmi4_data)
 {
 	/*
 	 * Enforce touch release event report to work-around such event
 	 * missing while touch IC is off.
 	 */
+#ifdef TYPE_B_PROTOCOL
+	int i;
+	for (i = 0; i < rmi4_data->num_of_fingers; i++) {
+		input_mt_slot(rmi4_data->input_dev, i);
+		input_mt_report_slot_state(rmi4_data->input_dev,
+				MT_TOOL_FINGER, false);
+	}
+#else
 	input_mt_sync(rmi4_data->input_dev);
+#endif
 	input_sync(rmi4_data->input_dev);
 
 	/* reset some TSB global vars like fingers_on_2d after resume
@@ -2835,7 +2932,8 @@ static void synaptics_dsx_on_resume(struct synaptics_rmi4_data *rmi4_data)
 	}
 }
 
-static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
+static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data,
+		unsigned char *f01_cmd_base_addr)
 {
 	int current_state, retval;
 	bool need_to_query = false;
@@ -2860,6 +2958,7 @@ static int synaptics_rmi4_reset_device(struct synaptics_rmi4_data *rmi4_data)
 		synaptics_dsx_ic_reset(rmi4_data);
 	else {
 		retval = synaptics_rmi4_i2c_write(rmi4_data,
+			f01_cmd_base_addr ? *f01_cmd_base_addr :
 			rmi4_data->f01_cmd_base_addr,
 			&command,
 			sizeof(command));
@@ -3581,9 +3680,11 @@ static int synaptics_rmi4_resume(struct device *dev)
 
 		rmi4_data->touch_stopped = false;
 
-		synaptics_dsx_on_resume(rmi4_data);
+		is_palm_detect = false;
+		touch_down = false;
+		synaptics_dsx_release_all(rmi4_data);
 		if (rmi4_data->reset_on_resume)
-			synaptics_rmi4_reset_device(rmi4_data);
+			synaptics_rmi4_reset_device(rmi4_data, NULL);
 	}
 
 	synaptics_dsx_sensor_ready_state(rmi4_data, false);

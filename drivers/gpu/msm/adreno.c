@@ -10,7 +10,6 @@
  * GNU General Public License for more details.
  *
  */
-#include <linux/dropbox.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
@@ -20,6 +19,7 @@
 #include <linux/of_device.h>
 #include <linux/msm_kgsl.h>
 #include <linux/delay.h>
+#include <linux/dropbox.h>
 
 #include <mach/socinfo.h>
 #include <mach/msm_bus_board.h>
@@ -137,6 +137,9 @@ static struct adreno_device device_3d0 = {
 	.fast_hang_detect = 1,
 	.long_ib_detect = 1,
 };
+
+char kgsl_ft_report[KGSL_FT_REPORT_LEN];
+int kgsl_ft_report_pos;
 
 /* This set of registers are used for Hang detection
  * If the values of these registers are same after
@@ -1519,24 +1522,6 @@ adreno_ocmem_gmem_free(struct adreno_device *adreno_dev)
 }
 #endif
 
-void adreno_hang_dropbox_trigger_callback(void *data)
-{
-	struct kgsl_device *device = (struct kgsl_device *)data;
-
-	mutex_lock(&device->mutex);
-
-	kgsl_postmortem_dump(device, 1);
-	kgsl_device_snapshot(device, 0);
-
-	/* add dropbox events */
-	dropbox_queue_event_binary("graphics_hang_snapshot", device->snapshot,
-		device->snapshot_size);
-	dropbox_queue_event_text("graphics_hang_postmortem",
-		device->postmortem_dump, device->postmortem_size);
-
-	mutex_unlock(&device->mutex);
-}
-
 static int __devinit
 adreno_probe(struct platform_device *pdev)
 {
@@ -1565,7 +1550,6 @@ adreno_probe(struct platform_device *pdev)
 	if (status)
 		goto error_close_rb;
 
-	adreno_postmortem_sysfs_init(device);
 #ifdef CONFIG_DEBUG_FS
 	adreno_debugfs_init(device);
 #endif
@@ -1576,9 +1560,6 @@ adreno_probe(struct platform_device *pdev)
 	kgsl_pwrscale_attach_policy(device, ADRENO_DEFAULT_PWRSCALE_POLICY);
 
 	INIT_DELAYED_WORK(&adreno_hang_panic_work, adreno_hang_panic_work_func);
-
-	dropbox_register_trigger_callback("graphics_hang",
-		&adreno_hang_dropbox_trigger_callback, device);
 
 	device->flags &= ~KGSL_FLAGS_SOFT_RESET;
 	return 0;
@@ -1598,8 +1579,6 @@ static int __devexit adreno_remove(struct platform_device *pdev)
 
 	device = (struct kgsl_device *)pdev->id_entry->driver_data;
 	adreno_dev = ADRENO_DEVICE(device);
-
-	adreno_postmortem_sysfs_close(device);
 
 	kgsl_pwrscale_detach_policy(device);
 	kgsl_pwrscale_close(device);
@@ -2627,12 +2606,8 @@ adreno_dump_and_exec_ft(struct kgsl_device *device)
 			*/
 			kgsl_device_snapshot(device, 1);
 
-			/* add dropbox events */
-			dropbox_queue_event_binary("graphics_hang_snapshot",
+			dropbox_queue_event_binary("gpu_snapshot",
 				device->snapshot, device->snapshot_size);
-			dropbox_queue_event_text("graphics_hang_postmortem",
-				device->postmortem_dump,
-				device->postmortem_size);
 		}
 
 		result = adreno_ft(device, &ft_data);
@@ -2653,6 +2628,8 @@ adreno_dump_and_exec_ft(struct kgsl_device *device)
 				msecs_to_jiffies(KGSL_TIMEOUT_PART)));
 		}
 		complete_all(&device->ft_gate);
+		dropbox_queue_event_text("gpu_ft_report", kgsl_ft_report,
+			kgsl_ft_report_pos);
 	}
 done:
 	return result;
@@ -3596,6 +3573,9 @@ unsigned int adreno_ft_detect(struct kgsl_device *device,
 					KGSL_TIMEOUT_LONG_IB_DETECTION) {
 					if (adreno_dev->long_ib_ts !=
 						curr_global_ts) {
+						if (device->state !=
+							KGSL_STATE_DUMP_AND_FT)
+							kgsl_ft_report_pos = 0;
 						KGSL_FT_ERR(device,
 						"Proc %s, ctxt_id %d ts %d"
 						"used GPU for %d ms long ib "

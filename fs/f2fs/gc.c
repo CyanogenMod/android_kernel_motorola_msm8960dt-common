@@ -29,10 +29,11 @@ static struct kmem_cache *winode_slab;
 static int gc_thread_func(void *data)
 {
 	struct f2fs_sb_info *sbi = data;
+	struct f2fs_gc_kthread *gc_th = sbi->gc_thread;
 	wait_queue_head_t *wq = &sbi->gc_thread->gc_wait_queue_head;
 	long wait_ms;
 
-	wait_ms = GC_THREAD_MIN_SLEEP_TIME;
+	wait_ms = gc_th->min_sleep_time;
 
 	do {
 		if (try_to_freeze())
@@ -61,15 +62,15 @@ static int gc_thread_func(void *data)
 			continue;
 
 		if (!is_idle(sbi)) {
-			wait_ms = increase_sleep_time(wait_ms);
+			wait_ms = increase_sleep_time(gc_th, wait_ms);
 			mutex_unlock(&sbi->gc_mutex);
 			continue;
 		}
 
 		if (has_enough_invalid_blocks(sbi))
-			wait_ms = decrease_sleep_time(wait_ms);
+			wait_ms = decrease_sleep_time(gc_th, wait_ms);
 		else
-			wait_ms = increase_sleep_time(wait_ms);
+			wait_ms = increase_sleep_time(gc_th, wait_ms);
 
 #ifdef CONFIG_F2FS_STAT_FS
 		sbi->bg_gc++;
@@ -77,7 +78,7 @@ static int gc_thread_func(void *data)
 
 		/* if return value is not zero, no victim was selected */
 		if (f2fs_gc(sbi))
-			wait_ms = GC_THREAD_NOGC_SLEEP_TIME;
+			wait_ms = gc_th->no_gc_sleep_time;
 	} while (!kthread_should_stop());
 	return 0;
 }
@@ -95,6 +96,12 @@ int start_gc_thread(struct f2fs_sb_info *sbi)
 		err = -ENOMEM;
 		goto out;
 	}
+
+	gc_th->min_sleep_time = DEF_GC_THREAD_MIN_SLEEP_TIME;
+	gc_th->max_sleep_time = DEF_GC_THREAD_MAX_SLEEP_TIME;
+	gc_th->no_gc_sleep_time = DEF_GC_THREAD_NOGC_SLEEP_TIME;
+
+	gc_th->gc_idle = 0;
 
 	sbi->gc_thread = gc_th;
 	init_waitqueue_head(&sbi->gc_thread->gc_wait_queue_head);
@@ -120,9 +127,17 @@ void stop_gc_thread(struct f2fs_sb_info *sbi)
 	sbi->gc_thread = NULL;
 }
 
-static int select_gc_type(int gc_type)
+static int select_gc_type(struct f2fs_gc_kthread *gc_th, int gc_type)
 {
-	return (gc_type == BG_GC) ? GC_CB : GC_GREEDY;
+	int gc_mode = (gc_type == BG_GC) ? GC_CB : GC_GREEDY;
+
+	if (gc_th && gc_th->gc_idle) {
+		if (gc_th->gc_idle == 1)
+			gc_mode = GC_CB;
+		else if (gc_th->gc_idle == 2)
+			gc_mode = GC_GREEDY;
+	}
+	return gc_mode;
 }
 
 static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
@@ -136,7 +151,7 @@ static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
 		p->max_search = dirty_i->nr_dirty[type];
 		p->ofs_unit = 1;
 	} else {
-		p->gc_mode = select_gc_type(gc_type);
+		p->gc_mode = select_gc_type(sbi->gc_thread, gc_type);
 		p->dirty_segmap = dirty_i->dirty_segmap[DIRTY];
 		p->max_search = dirty_i->nr_dirty[DIRTY];
 		p->ofs_unit = sbi->segs_per_sec;

@@ -726,7 +726,10 @@ int adreno_dump(struct kgsl_device *device, int manual)
 
 	/* If postmortem dump is not enabled, dump minimal set and return */
 	if (!device->pm_dump_enable) {
-
+		KGSL_FT_REPORT("STATUS %08X | IB1:%08X/%08X | IB2: %08X/%08X"
+			" | RPTR: %04X | WPTR: %04X\n",
+			rbbm_status,  cp_ib1_base, cp_ib1_bufsz, cp_ib2_base,
+			cp_ib2_bufsz, cp_rb_rptr, cp_rb_wptr);
 		KGSL_LOG_DUMP(device,
 			"STATUS %08X | IB1:%08X/%08X | IB2: %08X/%08X"
 			" | RPTR: %04X | WPTR: %04X\n",
@@ -904,21 +907,4 @@ error_vfree:
 	vfree(rb_copy);
 end:
 	return result;
-}
-
-int adreno_postmortem_sysfs_init(struct kgsl_device *device)
-{
-	device->postmortem_size = PAGE_SIZE;
-	device->postmortem_dump = kzalloc(device->postmortem_size, GFP_KERNEL);
-	device->postmortem_pos = 0;
-
-	return 0;
-}
-
-void adreno_postmortem_sysfs_close(struct kgsl_device *device)
-{
-	device->postmortem_size = 0;
-	device->postmortem_pos = 0;
-	kfree(device->postmortem_dump);
-	device->postmortem_dump = NULL;
 }

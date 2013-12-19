@@ -3332,7 +3332,7 @@ static int mdp_probe(struct platform_device *pdev)
 		}
 	}
 
-	mdp4_hang_init();
+	mdp4_timeout_init();
 
 	return 0;
 
@@ -3371,6 +3371,7 @@ void mdp_footswitch_ctrl(boolean on)
 		regulator_enable(footswitch);
 		mdp_footswitch_on = 1;
 		mipi_dsi_clk_disable();
+		mipi_dsi_unprepare_clocks();
 		mipi_dsi_phy_ctrl(0);
 		mipi_dsi_ahb_ctrl(0);
 		mipi_dsi_unprepare_ahb_clocks();

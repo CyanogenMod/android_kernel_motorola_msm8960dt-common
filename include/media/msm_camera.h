@@ -1032,6 +1032,7 @@ struct msm_snapshot_pp_status {
 #define CFG_ACTUAOTOR_REG_INIT        64
 #define CFG_MAX                       65
 
+
 #define MOVE_NEAR	0
 #define MOVE_FAR	1
 

@@ -679,6 +679,29 @@ static int tfa9890_get_ic_ver(struct snd_soc_codec *codec)
 	return ret;
 }
 
+static int tfa9890_wait_pll_sync(struct tfa9890_priv *tfa9890)
+{
+	int ret = 0;
+	int tries = 0;
+	u16 val;
+	struct snd_soc_codec *codec = tfa9890->codec;
+
+	/* check if DSP pll is synced */
+	do {
+		val = snd_soc_read(codec, TFA9890_SYS_STATUS_REG);
+		if ((val & TFA9890_STATUS_UP_MASK) == TFA9890_STATUS_UP_MASK)
+			break;
+		msleep_interruptible(1);
+	} while ((++tries < PLL_SYNC_RETRIES));
+
+	if (tries == PLL_SYNC_RETRIES) {
+		pr_err("tfa9890:DSP pll sync failed!!");
+		ret = -EIO;
+	}
+
+	return ret;
+}
+
 static int tfa9887_load_dsp_patch(struct snd_soc_codec *codec, const u8 *fw,
 				int fw_len)
 {
@@ -876,23 +899,13 @@ static void tfa9890_work_mode(struct work_struct *work)
 {
 	struct tfa9890_priv *tfa9890 =
 			container_of(work, struct tfa9890_priv, mode_work);
-	struct snd_soc_codec *codec = tfa9890->codec;
-	int tries = 0;
-	u16 val;
+	int ret;
 
 	mutex_lock(&tfa9890->dsp_init_lock);
 	/* check if DSP pll is synced, It should be sync'ed at this point */
-	do {
-		val = snd_soc_read(codec, TFA9890_SYS_STATUS_REG);
-		if ((val & TFA9890_STATUS_UP_MASK) == TFA9890_STATUS_UP_MASK)
-			break;
-		msleep_interruptible(1);
-	} while ((++tries < PLL_SYNC_RETRIES));
-
-	if (tries == PLL_SYNC_RETRIES) {
-		pr_err("tfa9890:DSP pll sync failed!!");
+	ret = tfa9890_wait_pll_sync(tfa9890);
+	if (ret < 0)
 		goto out;
-	}
 
 	tfa9890_set_mode(tfa9890);
 out:
@@ -965,31 +978,15 @@ static void tfa9890_dsp_init(struct work_struct *work)
 	struct snd_soc_codec *codec = tfa9890->codec;
 	u16 val;
 	int ret;
-	int tries = 0;
 
 	mutex_lock(&tfa9890->dsp_init_lock);
-	/*set the cool flux in reset */
-	snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x1);
-	/* power up IC */
 
-	tfa9890_power(codec, 1);
 	/* check if DSP pll is synced, It should be sync'ed at this point */
-	do {
-		val = snd_soc_read(codec, TFA9890_SYS_STATUS_REG);
-		if ((val & TFA9890_STATUS_UP_MASK) == TFA9890_STATUS_UP_MASK)
-			break;
-		msleep_interruptible(1);
-	} while ((++tries < PLL_SYNC_RETRIES));
-
-	if (tries == PLL_SYNC_RETRIES) {
-		pr_err("tfa9890:DSP pll sync failed!!");
+	ret = tfa9890_wait_pll_sync(tfa9890);
+	if (ret < 0)
 		goto out;
-	}
-	/* wait additional 3msec for PLL to be stable */
-	usleep_range(3000, 3000);
 
-	/* take DSP out of reset */
-	snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x0);
+	val = snd_soc_read(codec, TFA9890_SYS_STATUS_REG);
 
 	pr_info("tfa9890: Initializing DSP, status:0x%x", val);
 
@@ -1185,6 +1182,27 @@ static int tfa9890_mute(struct snd_soc_dai *dai, int mute)
 			usleep_range(10000, 10000);
 		} while ((++tries < 20));
 	} else {
+		if (tfa9890->dsp_init == TFA9890_DSP_INIT_PENDING) {
+			/* if the initialzation is pending treat it as cold
+			 * startcase, need to put the dsp in reset and and
+			 * power it up after additional delay to make sure
+			 * the pll is stable. once the init is done this step
+			 * is not needed for warm start as the dsp firmware
+			 * patch configures the PLL for stable startup.
+			 */
+			snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x1);
+			/* power up IC */
+			tfa9890_power(codec, 1);
+
+			tfa9890_wait_pll_sync(tfa9890);
+
+			/* wait additional 3msec for PLL to be stable */
+			usleep_range(3000, 3000);
+
+			/* take DSP out of reset */
+			snd_soc_write(codec, TFA9890_CF_CONTROLS, 0x0);
+		}
+
 		tfa9890_set_mute(codec, TFA9890_MUTE_OFF);
 		/* start monitor thread to check IC status bit 5secs, and
 		 * re-init IC to recover.
@@ -1193,6 +1211,7 @@ static int tfa9890_mute(struct snd_soc_dai *dai, int mute)
 			HZ);
 	}
 	mutex_unlock(&tfa9890->dsp_init_lock);
+
 	return 0;
 }
 
@@ -1206,7 +1225,7 @@ static int tfa9890_startup(struct snd_pcm_substream *substream,
 	pr_debug("%s: enter\n", __func__);
 	/* power up IC here only on warm start, if the initialization
 	 * is still pending the DSP will be put in reset and powered
-	 * up ater firmware load in the init function.
+	 * up ater firmware load in the mute function where clock is up.
 	 */
 	if (tfa9890->dsp_init == TFA9890_DSP_INIT_DONE)
 		tfa9890_power(codec, 1);
@@ -1643,6 +1662,8 @@ static __devinit int tfa9890_i2c_probe(struct i2c_client *i2c,
 	tfa9890->max_vol_steps = pdata->max_vol_steps;
 	tfa9890->control_data = i2c;
 	tfa9890->dsp_init = TFA9890_DSP_INIT_PENDING;
+	tfa9890->vol_idx = pdata->max_vol_steps;
+	tfa9890->curr_vol_idx = pdata->max_vol_steps;
 	i2c_set_clientdata(i2c, tfa9890);
 	mutex_init(&tfa9890->dsp_init_lock);
 	mutex_init(&tfa9890->i2c_rw_lock);

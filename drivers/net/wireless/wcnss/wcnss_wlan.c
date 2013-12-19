@@ -87,7 +87,6 @@ static DEFINE_SPINLOCK(reg_spinlock);
 #define	WCNSS_CALDATA_DNLD_REQ        (WCNSS_CTRL_MSG_START + 6)
 #define	WCNSS_CALDATA_DNLD_RSP        (WCNSS_CTRL_MSG_START + 7)
 
-
 #define VALID_VERSION(version) \
 	((strncmp(version, "INVALID", WCNSS_VERSION_LEN)) ? 1 : 0)
 
@@ -135,7 +134,6 @@ static struct wcnss_pmic_dump wcnss_pmic_reg_dump[] = {
 #define CAN_RECEIVE_CALDATA  (1 << 15)
 #define WCNSS_RESP_SUCCESS   1
 #define WCNSS_RESP_FAIL      0
-
 
 /* Macro to find the total number fragments of the NV bin Image */
 #define TOTALFRAGMENTS(x) (((x % NV_FRAGMENT_SIZE) == 0) ? \
@@ -1534,11 +1532,11 @@ wcnss_wlan_probe(struct platform_device *pdev)
 	if (ret)
 		return -ENOENT;
 
-	/* populate serial_number during init */
-	penv->serial_number = system_serial_low;
-
 	mutex_init(&penv->dev_lock);
 	init_waitqueue_head(&penv->read_wait);
+
+	/* populate serial_number during init */
+	penv->serial_number = system_serial_low;
 
 	/*
 	 * Since we were built into the kernel we'll be called as part

@@ -100,6 +100,7 @@
 
 #define ALGO_CONFIG			0x26
 #define ALGO_INT_STATUS			0x27
+#define GENERIC_INT_STATUS		0x28
 
 #define MOTION_DATA			0x2D
 
@@ -129,6 +130,7 @@
 #define FLAT_DATA			0x4B
 #define CAMERA				0x4C
 #define NFC					0x4D
+#define SIM					0x4E
 
 #define ALGO_CFG_ACCUM_MODALITY  0x5D
 #define ALGO_REQ_ACCUM_MODALITY  0x60
@@ -176,6 +178,8 @@
 
 #define AOD_WAKEUP_REASON_ESD		4
 
+#define MSP_MAX_GENERIC_DATA		512
+
 static long time_delta;
 static unsigned int msp430_irq_disable;
 module_param_named(irq_disable, msp430_irq_disable, uint, 0644);
@@ -211,7 +215,6 @@ static unsigned char msp_cmdbuff[MSP430_HEADER_LENGTH + MSP430_CMDLENGTH_BYTES +
 			MSP430_CORECOMMAND_LENGTH + MSP430_CRC_LENGTH];
 
 static unsigned char read_cmdbuff[512];
-
 
 enum msp_mode {
 	UNINITIALIZED,
@@ -1044,7 +1047,7 @@ static void msp430_irq_work_func(struct work_struct *work)
 		y = (read_cmdbuff[2] << 8) | read_cmdbuff[3];
 		z = (read_cmdbuff[4] << 8) | read_cmdbuff[5];
 		msp430_as_data_buffer_write(ps_msp430, DT_MAG, x, y, z,
-			msp_cmdbuff[12]);
+			read_cmdbuff[12]);
 
 		dev_dbg(&ps_msp430->client->dev,
 			"Sending mag(x,y,z)values:x=%d,y=%d,z=%d\n",
@@ -1055,7 +1058,7 @@ static void msp430_irq_work_func(struct work_struct *work)
 		/* roll value needs to be negated */
 		z = -((read_cmdbuff[10] << 8) | read_cmdbuff[11]);
 		msp430_as_data_buffer_write(ps_msp430, DT_ORIENT, x, y, z,
-			msp_cmdbuff[12]);
+			read_cmdbuff[12]);
 
 		dev_dbg(&ps_msp430->client->dev,
 			"Sending orient(x,y,z)values:x=%d,y=%d,z=%d\n",
@@ -1183,6 +1186,7 @@ static void msp430_irq_wake_work_func(struct work_struct *work)
 {
 	int err;
 	unsigned short irq_status, irq2_status;
+	uint8_t irq3_status;
 	signed short x, y, z, q;
 
 	struct msp430_data *ps_msp430 = container_of(work,
@@ -1211,6 +1215,15 @@ static void msp430_irq_wake_work_func(struct work_struct *work)
 		goto EXIT;
 	}
 	irq2_status = (read_cmdbuff[1] << 8) | read_cmdbuff[0];
+
+	/* read generic interrupt register */
+	msp_cmdbuff[0] = GENERIC_INT_STATUS;
+	err = msp430_i2c_write_read(ps_msp430, msp_cmdbuff, 1, 1);
+	if (err < 0) {
+		dev_err(&ps_msp430->client->dev, "Reading from msp failed\n");
+		goto EXIT;
+	}
+	irq3_status = read_cmdbuff[0];
 
 	/* First, check for error messages */
 	if (irq_status & M_LOG_MSG) {
@@ -1391,6 +1404,27 @@ static void msp430_irq_wake_work_func(struct work_struct *work)
 			x, 0, 0);
 
 	}
+	if (irq_status & M_SIM) {
+		msp_cmdbuff[0] = SIM;
+		err = msp430_i2c_write_read(ps_msp430, msp_cmdbuff, 1, 2);
+		if (err < 0) {
+			dev_err(&ps_msp430->client->dev,
+				"Reading sig_motion data from msp failed\n");
+			goto EXIT;
+		}
+		x = (read_cmdbuff[0] << 8) | read_cmdbuff[1];
+
+		msp430_as_data_buffer_write(ps_msp430, DT_SIM,
+					x, 0, 0, 0);
+
+		/* This is one shot sensor */
+		g_wake_sensor_state &= (~M_SIM);
+
+		dev_dbg(&ps_msp430->client->dev,
+				"Sending SIM(x,y,z)values:x=%d,y=%d,z=%d\n",
+				x, 0, 0);
+
+	}
 	if (irq2_status & M_MMOVEME) {
 		/* Client recieving action will be upper 2 MSB of status */
 		x = (irq2_status & MSP430_CLIENT_MASK) | M_MMOVEME;
@@ -1502,6 +1536,13 @@ static void msp430_irq_wake_work_func(struct work_struct *work)
 		z = (read_cmdbuff[3] << 8) | read_cmdbuff[2];
 		msp430_ms_data_buffer_write(ps_msp430, DT_ALGO_EVT, x, y, z, 0);
 		dev_dbg(&ps_msp430->client->dev, "Sending accum mvmt event\n");
+	}
+	if (irq3_status & M_GENERIC_INTRPT) {
+		/* x (data1) : irq3_status */
+		msp430_ms_data_buffer_write(ps_msp430, DT_GENERIC_INT,
+			irq3_status, 0, 0, 0);
+		dev_dbg(&ps_msp430->client->dev,
+			"Sending generic interrupt event:%d\n", irq3_status);
 	}
 EXIT:
 	mutex_unlock(&ps_msp430->lock);
@@ -1852,6 +1893,9 @@ static long msp430_misc_ioctl(struct file *file, unsigned int cmd,
 	static int brightness_table_loaded;
 	int err = -ENOTTY;
 	unsigned int addr = 0;
+	unsigned char *write_cmdbuff;
+	unsigned int data_size = 0;
+	unsigned char rw_bytes[4];
 	struct msp430_data *ps_msp430 = file->private_data;
 	unsigned int cmdlen = 0;
 	unsigned char byte;
@@ -2351,7 +2395,97 @@ static long msp430_misc_ioctl(struct file *file, unsigned int cmd,
 			msp_algo_info[addr].evt_size))
 			err = -EFAULT;
 		break;
+	case MSP430_IOCTL_WRITE_REG:
+		dev_dbg(&ps_msp430->client->dev,
+			"MSP430_IOCTL_WRITE_REG");
 
+		/* copy addr and size */
+		if (copy_from_user(&rw_bytes, argp, sizeof(rw_bytes))) {
+			dev_err(&ps_msp430->client->dev,
+				"Write Reg, copy bytes returned error\n");
+			err = -EFAULT;
+			break;
+		}
+		addr = (rw_bytes[0] << 8) | rw_bytes[1];
+		data_size = (rw_bytes[2] << 8) | rw_bytes[3];
+
+		/* fail if the write size is too large */
+		if (data_size > MSP_MAX_GENERIC_DATA - 1) {
+			err = -EFAULT;
+			dev_err(&ps_msp430->client->dev,
+				"Write Reg, data_size > %d\n",
+				MSP_MAX_GENERIC_DATA - 1);
+			break;
+		}
+
+		write_cmdbuff = kmalloc(
+			(data_size + 1) * sizeof(unsigned char), GFP_KERNEL);
+
+		/* check if memory was allocated */
+		if (write_cmdbuff == NULL) {
+			err = -EFAULT;
+			dev_err(&ps_msp430->client->dev,
+				"could not allocate memory for write_cmdbuff\n"
+				);
+			break;
+		}
+
+		/* copy in the data */
+		if (copy_from_user(&write_cmdbuff[1], argp + sizeof(rw_bytes),
+			data_size)) {
+			dev_err(&ps_msp430->client->dev,
+				"Write Reg copy from user returned error\n");
+			err = -EFAULT;
+			kfree(write_cmdbuff);
+			break;
+		}
+
+		/* setup the address */
+		write_cmdbuff[0] = addr;
+
+		/* + 1 for the address in [0] */
+		err = msp430_i2c_write(ps_msp430, write_cmdbuff,
+			data_size + 1);
+
+		if (err < 0)
+			dev_err(&msp430_misc_data->client->dev,
+				"Write Reg unable to write to direct reg %d\n",
+				err);
+		kfree(write_cmdbuff);
+
+		break;
+	case MSP430_IOCTL_READ_REG:
+		dev_dbg(&ps_msp430->client->dev,
+			"MSP430_IOCTL_READ_REG");
+
+		/* copy addr and size */
+		if (copy_from_user(&rw_bytes, argp, sizeof(rw_bytes))) {
+			dev_err(&ps_msp430->client->dev,
+			    "Read Reg, copy bytes returned error\n");
+			err = -EFAULT;
+			break;
+		}
+		addr = (rw_bytes[0] << 8) | rw_bytes[1];
+		data_size = (rw_bytes[2] << 8) | rw_bytes[3];
+
+		/* setup the address */
+		msp_cmdbuff[0] = addr;
+		err = msp430_i2c_write_read(ps_msp430, msp_cmdbuff, 1,
+			data_size);
+
+		if (err < 0)
+			dev_err(&msp430_misc_data->client->dev,
+				"Read Reg, unable to read from direct reg %d\n",
+				err);
+
+		if (copy_to_user(argp, read_cmdbuff, data_size)) {
+			dev_err(&ps_msp430->client->dev,
+				"Read Reg error copying to user\n");
+			err = -EFAULT;
+			break;
+		}
+
+		break;
 	/* No default here since previous switch could have
 	   handled the command and cannot over write that */
 	}

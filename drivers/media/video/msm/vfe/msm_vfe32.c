@@ -5728,7 +5728,7 @@ static void axi32_do_tasklet(unsigned long data)
 					VFE32_IMASK_COMMON_ERROR_ONLY_1);
 			}
 
-			if ((qcmd->vfeInterruptStatus1 & 0x3FFF00) &&
+			if ((qcmd->vfeInterruptStatus1 & 0x3FFF80) &&
 					atomic_read(&recovery_active) == 2) {
 				while (axi_busy_flag && halt_timeout--) {
 					if (msm_camera_io_r(
@@ -5758,7 +5758,8 @@ static void axi32_do_tasklet(unsigned long data)
 					!atomic_read(&recovery_active)) {
 			if (qcmd->vfeInterruptStatus1 &
 					VFE32_IMASK_VFE_ERROR_ONLY_1) {
-				pr_err("irq	errorIrq\n");
+				pr_err("irq	errorIrq, status = 0x%x\n",
+					qcmd->vfeInterruptStatus1);
 				vfe32_process_error_irq(
 					axi_ctrl,
 					qcmd->vfeInterruptStatus1 &
@@ -5884,7 +5885,7 @@ static irqreturn_t vfe32_parse_irq(int irq_num, void *data)
         if (atomic_read(&fault_recovery)) {
 		printk("Start fault recovery\n");
 		vfe32_complete_reset(axi_ctrl);
-	} else if ((qcmd->vfeInterruptStatus1 & 0x3FFF00) &&
+	} else if ((qcmd->vfeInterruptStatus1 & 0x3FFF80) &&
 				!atomic_read(&recovery_active)) {
 		printk("Start bus overflow recovery\n");
 		recover_irq_mask0 = msm_camera_io_r(

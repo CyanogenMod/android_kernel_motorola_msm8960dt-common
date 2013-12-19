@@ -85,6 +85,7 @@ static struct regulator *vbus_otg;
 static struct regulator *mhl_usb_hs_switch;
 static struct power_supply *psy;
 
+static bool ta_charger_detected;
 static bool aca_id_turned_on;
 static inline bool aca_enabled(void)
 {
@@ -2055,6 +2056,7 @@ static void msm_ta_detect_work(struct work_struct *w)
 	if ((readl(USB_PORTSC) & PORTSC_LS) == PORTSC_LS) {
 		pr_info("msm_ta_detect_work: ta dectection success\n");
 		/* inform to user space that SDP is no longer detected */
+		ta_charger_detected = true;
 		msm_otg_notify_charger(motg, 0);
 		motg->chg_state = USB_CHG_STATE_DETECTED;
 		motg->chg_type = USB_DCP_CHARGER;
@@ -2337,8 +2339,12 @@ static void msm_otg_sm_work(struct work_struct *w)
 					ulpi_write(otg->phy, 0x2, 0x85);
 					/* fall through */
 				case USB_PROPRIETARY_CHARGER:
-					msm_otg_notify_charger(motg,
-							IDEV_CHG_MAX);
+					if (ta_charger_detected)
+						msm_otg_notify_charger(motg,
+								IDEV_CHG_TA);
+					else
+						msm_otg_notify_charger(motg,
+								IDEV_CHG_MAX);
 					pm_runtime_put_noidle(otg->phy->dev);
 					pm_runtime_suspend(otg->phy->dev);
 					break;
@@ -2365,6 +2371,11 @@ static void msm_otg_sm_work(struct work_struct *w)
 						OTG_STATE_B_PERIPHERAL;
 					break;
 				case USB_SDP_CHARGER:
+					if (otg->gadget &&
+						usb_gadget_get_charge_enabled(
+								otg->gadget))
+						msm_otg_notify_charger(motg,
+								IDEV_CHG_MIN);
 					if(!slimport_is_connected()) {
 						msm_otg_start_peripheral(otg, 1);
 						otg->phy->state =
@@ -2392,6 +2403,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 			break;
 		} else {
 			pr_debug("chg_work cancel");
+			ta_charger_detected = false;
 			clear_bit(A_BUS_REQ, &motg->inputs);
 			cancel_delayed_work_sync(&motg->chg_work);
 			cancel_delayed_work_sync(&motg->check_ta_work);
@@ -3123,7 +3135,7 @@ static void msm_pmic_id_status_w(struct work_struct *w)
 
 }
 
-#define MSM_PMIC_ID_STATUS_DELAY	5 /* 5msec */
+#define MSM_PMIC_ID_STATUS_DELAY	25 /* 25msec */
 static irqreturn_t msm_pmic_id_irq(int irq, void *data)
 {
 	struct msm_otg *motg = data;
@@ -3997,6 +4009,7 @@ static int __devexit msm_otg_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&motg->pmic_id_status_work);
 	cancel_delayed_work_sync(&motg->check_ta_work);
 	cancel_work_sync(&motg->sm_work);
+	ta_charger_detected = false;
 
 	pm_runtime_resume(&pdev->dev);
 
