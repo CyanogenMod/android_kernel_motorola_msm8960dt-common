@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm 3.4.74 Kernel Configuration
+# Linux/arm 3.4.77 Kernel Configuration
 #
 CONFIG_ARM=y
 CONFIG_ARM_HAS_SG_CHAIN=y
@@ -1825,7 +1825,6 @@ CONFIG_HW_RANDOM_MSM=y
 # CONFIG_RAMOOPS is not set
 CONFIG_MSM_ROTATOR=y
 CONFIG_MSM_ADSPRPC=m
-# CONFIG_MMC_GENERIC_CSDIO is not set
 CONFIG_I2C=y
 CONFIG_I2C_BOARDINFO=y
 CONFIG_I2C_COMPAT=y
@@ -3174,7 +3173,10 @@ CONFIG_RTC_INTF_ALARM_DEV=y
 CONFIG_RTC_DRV_PM8XXX=y
 # CONFIG_DMADEVICES is not set
 # CONFIG_AUXDISPLAY is not set
-# CONFIG_UIO is not set
+CONFIG_UIO=y
+# CONFIG_UIO_PDRV is not set
+# CONFIG_UIO_PDRV_GENIRQ is not set
+CONFIG_UIO_MSM_SHAREDMEM=y
 
 #
 # Virtio drivers
