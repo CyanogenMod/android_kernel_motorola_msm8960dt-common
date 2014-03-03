@@ -2649,8 +2649,8 @@ static int mdp4_overlay_req2pipe(struct mdp_overlay *req, int mixer,
 		int xres;
 		int yres;
 
-		xres = mfd->panel_info.xres;
-		yres = mfd->panel_info.yres;
+		xres = mfd->var_xres;
+		yres = mfd->var_yres;
 
 		if (((req->dst_rect.x + req->dst_rect.w) > xres) ||
 			((req->dst_rect.y + req->dst_rect.h) > yres)) {
@@ -2836,16 +2836,13 @@ static int mdp4_calc_req_mdp_clk(struct msm_fb_data_type *mfd,
 	pr_debug("%s: the right %d shifted xscale is %d.\n",
 		 __func__, shift, xscale);
 
-	if (src_h > dst_h) {
-		yscale = src_h;
-		yscale <<= shift;
-		yscale /= dst_h;
-	} else {		/* upscale */
-		yscale = dst_h;
-		yscale <<= shift;
-		yscale /= src_h;
-	}
+	if (src_h > dst_h)
+	        yscale = src_h;
+	else
+                yscale = dst_h;
 
+        yscale <<= shift;
+        yscale /= dst_h;
 	yscale *= src_w;
 	yscale /= hsync;
 
@@ -4002,7 +3999,7 @@ int mdp4_overlay_commit(struct fb_info *info)
 		break;
 	}
 
-	if (mfd->index == 0)
+	if (mfd->index == 0 && !mfd->quickdraw_in_progress)
 		mdp4_dsi_panel_on(mfd);
 
 	msm_fb_signal_timeline(mfd);

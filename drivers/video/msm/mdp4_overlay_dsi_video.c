@@ -368,6 +368,7 @@ static void mdp4_video_vsync_irq_ctrl(int cndx, int enable)
 			if (vsync_irq_cnt == 0)
 				vsync_irq_disable(INTR_PRIMARY_VSYNC,
 						MDP_PRIM_VSYNC_TERM);
+			wake_up_interruptible_all(&vctrl->wait_queue);
 		}
 	}
 	pr_debug("%s: enable=%d cnt=%d\n", __func__, enable, vsync_irq_cnt);
@@ -426,8 +427,6 @@ void mdp4_dsi_video_wait4vsync(int cndx)
 static void mdp4_dsi_video_wait4dmap(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
-	int retries = MAX_DMAP_TIMEOUTS;
-	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -439,40 +438,7 @@ static void mdp4_dsi_video_wait4dmap(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	while (retries > 0) {
-		if (!wait_for_completion_timeout(&vctrl->dmap_comp,
-						 WAIT_TOUT)) {
-			pr_err("%s %d  TIMEOUT_ (retries left: %d)\n", __func__,
-				__LINE__, retries);
-			timeout_occurred[cndx] = 1;
-			/* only dump the hang once */
-			if (retries == MAX_DMAP_TIMEOUTS)
-				mdp4_hang_dump(__func__);
-		} else {
-			if (timeout_occurred[cndx] > 0)
-				pr_info("%s: recovered from previous timeout\n",
-					__func__);
-			timeout_occurred[cndx] = 0;
-
-			if (mdp4_dmap_timeout_counter[cndx] > 0) {
-				pr_info("%s: successful dmap wait after a "
-					"failure\n", __func__);
-				mdp4_dmap_timeout_counter[cndx] = 0;
-			}
-
-			break;
-		}
-		retries--;
-	}
-
-	if (retries == 0) {
-		mdp4_dmap_timeout_counter[cndx]++;
-		if (mdp4_dmap_timeout_counter[cndx] >= DMAP_TIMEOUT_BUG_COUNT) {
-			pr_err("%s: Reached maximum number of dmap timeouts, "
-				"bugging out", __func__);
-			BUG();
-		}
-	}
+	wait_for_completion(&vctrl->dmap_comp);
 }
 
 
@@ -498,7 +464,6 @@ static void mdp4_dsi_video_wait4dmap_done(int cndx)
 static void mdp4_dsi_video_wait4ov(int cndx)
 {
 	struct vsycn_ctrl *vctrl;
-	static int timeout_occurred[MAX_CONTROLLER];
 
 	if (cndx >= MAX_CONTROLLER) {
 		pr_err("%s: out or range: cndx=%d\n", __func__, cndx);
@@ -510,16 +475,7 @@ static void mdp4_dsi_video_wait4ov(int cndx)
 	if (atomic_read(&vctrl->suspend) > 0)
 		return;
 
-	if (!wait_for_completion_timeout(&vctrl->ov_comp, WAIT_TOUT)) {
-		pr_err("%s: TIMEOUT\n", __func__);
-		timeout_occurred[cndx] = 1;
-		mdp4_hang_dump(__func__);
-	} else {
-		if (timeout_occurred[cndx])
-			pr_info("%s: recovered from previous timeout\n",
-				__func__);
-		timeout_occurred[cndx] = 0;
-	}
+	wait_for_completion(&vctrl->ov_comp);
 }
 
 ssize_t mdp4_dsi_video_show_event(struct device *dev,

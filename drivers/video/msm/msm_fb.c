@@ -53,6 +53,8 @@
 #include "mdp.h"
 #include "mdp4.h"
 
+#include "msm_fb_quickdraw.h"
+
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MSM_FB_NUM	3
 #endif
@@ -627,7 +629,7 @@ static int msm_fb_suspend_sub(struct msm_fb_data_type *mfd)
 
 	mfd->suspend.op_suspend = true;
 
-	if (mfd->op_enable) {
+	if (mfd->op_enable || mfd->quickdraw_in_progress) {
 		ret =
 		     msm_fb_blank_sub(FB_BLANK_POWERDOWN, mfd->fbi,
 				      mfd->suspend.op_enable);
@@ -686,7 +688,7 @@ static int msm_fb_resume_sub(struct msm_fb_data_type *mfd)
 	mfd->sw_refreshing_enable = mfd->suspend.sw_refreshing_enable;
 	mfd->op_enable = mfd->suspend.op_enable;
 
-	if (mfd->suspend.panel_power_on) {
+	if (mfd->suspend.panel_power_on || mfd->quickdraw_in_progress) {
 		if (mfd->panel_driver_on == FALSE)
 			msm_fb_blank_sub(FB_BLANK_POWERDOWN, mfd->fbi,
 				      mfd->op_enable);
@@ -996,11 +998,6 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 	struct msm_fb_panel_data *pdata = NULL;
 	int ret = 0;
 
-	if (!op_enable) {
-		pr_err("%s: !op_enable\n", __func__);
-		return -EPERM;
-	}
-
 	pdata = (struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
 	if ((!pdata) || (!pdata->on) || (!pdata->off)) {
 		printk(KERN_ERR "msm_fb_blank_sub: no panel operation detected!\n");
@@ -1052,11 +1049,6 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 
 			msm_fb_release_timeline(mfd);
 			mfd->op_enable = TRUE;
-			mfd->suspend_cfg.partial = 0;
-			mfd->resume_cfg.partial = 0;
-			mfd->resume_cfg.keep_hidden = 0;
-			mfd->resume_cfg.panel_state =
-				MSMFB_RESUME_CFG_STATE_DISP_OFF_SLEEP_IN;
 		}
 		break;
 	}
@@ -1173,7 +1165,6 @@ static int msm_fb_blank(int blank_mode, struct fb_info *info)
 		if (blank_mode == FB_BLANK_UNBLANK) {
 			mfd->suspend.panel_power_on = TRUE;
 			/* if unblank is called when system is in suspend,
-			unlock_panel_mutex(mfd);
 			wait for the system to resume */
 			while (mfd->suspend.op_suspend) {
 				pr_debug("waiting for system to resume\n");
@@ -1212,6 +1203,9 @@ static int msm_fb_mmap(struct fb_info *info, struct vm_area_struct * vma)
 	u32 len = PAGE_ALIGN((start & ~PAGE_MASK) + info->fix.smem_len);
 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+
+	if (!start)
+		return -EINVAL;
 
 	if ((vma->vm_end <= vma->vm_start) ||
 	    (off >= len) ||
@@ -1610,6 +1604,8 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 
 	mfd->is_partial_mode_supported =
 		msm_fb_pdata->is_partial_mode_supported;
+	mfd->is_quickdraw_enabled =
+		msm_fb_pdata->is_quickdraw_enabled;
 
 	/* cursor memory allocation */
 	if (mfd->cursor_update) {
@@ -1809,6 +1805,13 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	}
 #endif /* MSM_FB_ENABLE_DBGFS */
 
+	if (mfd->is_quickdraw_enabled && mfd->is_quickdraw_enabled() &&
+	    mfd->index == 0) {
+		msm_fb_quickdraw_register_notifier(mfd);
+		mfd->quickdraw_fb_resume = msm_fb_resume_sub;
+		mfd->quickdraw_fb_suspend = msm_fb_suspend_sub;
+	}
+
 	return ret;
 }
 
@@ -1825,6 +1828,8 @@ static int msm_fb_open(struct fb_info *info, int user)
 	}
 
 	if (info->node == 0 && !(mfd->cont_splash_done)) {	/* primary */
+			if(!mfd->ref_cnt)
+				mdp_set_dma_pan_info(info, NULL, TRUE);
 			mfd->ref_cnt++;
 			return 0;
 	}
@@ -1980,7 +1985,8 @@ static int msm_fb_pan_idle(struct msm_fb_data_type *mfd)
 	}
 	return ret;
 }
-static int msm_fb_pan_display_ex(struct fb_info *info,
+
+int msm_fb_pan_display_ex(struct fb_info *info,
 		struct mdp_display_commit *disp_commit)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
@@ -1988,12 +1994,17 @@ static int msm_fb_pan_display_ex(struct fb_info *info,
 	struct fb_var_screeninfo *var = &disp_commit->var;
 	u32 wait_for_finish = disp_commit->wait_for_finish;
 	int ret = 0;
-
 	if (disp_commit->flags &
 		MDP_DISPLAY_COMMIT_OVERLAY) {
 		if (!mfd->panel_power_on) /* suspended */
 			return -EPERM;
 	} else {
+	        /*
+                WFD panel info was not getting updated,
+		in case of resolution other than 1280x720
+                */
+                mfd->var_xres = info->var.xres;
+                mfd->var_yres = info->var.yres;
 		/*
 		 * If framebuffer is 2, io pan display is not allowed.
 		 */
@@ -3345,6 +3356,18 @@ static int msmfb_overlay_play_wait(struct fb_info *info, unsigned long *argp)
 	return ret;
 }
 
+int msmfb_overlay_play_sub(struct fb_info *info, struct msmfb_overlay_data *req)
+{
+	int ret;
+	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+
+	lock_panel_mutex(mfd);
+	ret = mdp4_overlay_play(info, req);
+	unlock_panel_mutex(mfd);
+
+	return ret;
+}
+
 static int msmfb_overlay_play(struct fb_info *info, unsigned long *argp)
 {
 	int	ret;
@@ -3381,9 +3404,7 @@ static int msmfb_overlay_play(struct fb_info *info, unsigned long *argp)
 	add_timer(&mfd->msmfb_no_update_notify_timer);
 	mutex_unlock(&msm_fb_notify_update_sem);
 
-	lock_panel_mutex(mfd);
-	ret = mdp4_overlay_play(info, &req);
-	unlock_panel_mutex(mfd);
+	ret = msmfb_overlay_play_sub(info, &req);
 
 	if (info->node == 0 && (mfd->cont_splash_done)) /* primary */
 		mdp_free_splash_buffer(mfd);
@@ -4288,24 +4309,8 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		if (msm_fb_pdata
 			&& msm_fb_pdata->is_partial_mode_supported
 			&& msm_fb_pdata->is_partial_mode_supported()) {
-			struct msm_fb_panel_data *pdata;
-			int hide = 0;
-
-			if (copy_from_user(&hide,
-							(void __user *)arg,
-							sizeof(hide))) {
-				pr_err("%s: MSMFB_HIDE_IMG copy_from_user failed\n",
-					__func__);
-				return -EFAULT;
-			}
-			pdata = (struct msm_fb_panel_data *)
-				mfd->pdev->dev.platform_data;
-			if (pdata && pdata->hide_img) {
-				ret = pdata->hide_img(mfd, hide);
-				if (ret)
-					pr_err("%s: MSMFB_HIDE_IMG hide_img failed\n",
-						__func__);
-			}
+			pr_warn("%s: MSMFB_HIDE_IMG DEPRECATED\n",
+				__func__);
 		}
 		break;
 
@@ -4313,19 +4318,8 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		if (msm_fb_pdata
 			&& msm_fb_pdata->is_partial_mode_supported
 			&& msm_fb_pdata->is_partial_mode_supported()) {
-
-			lock_panel_mutex(mfd);
-			ret = copy_from_user(&mfd->suspend_cfg,
-						(void __user *)arg,
-						sizeof(mfd->suspend_cfg));
-			unlock_panel_mutex(mfd);
-			if (ret) {
-				pr_err("%s: MSMFB_PREPARE_FOR_SUSPEND failed\n",
-					__func__);
-				return -EFAULT;
-			}
-			pr_info("%s: MSMFB_PREPARE_FOR_SUSPEND(%d)\n",
-				__func__, mfd->suspend_cfg.partial);
+			pr_warn("%s: MSMFB_PREPARE_FOR_SUSPEND DEPRECATED\n",
+				__func__);
 		}
 		break;
 
@@ -4333,23 +4327,69 @@ static int msm_fb_ioctl(struct fb_info *info, unsigned int cmd,
 		if (msm_fb_pdata
 			&& msm_fb_pdata->is_partial_mode_supported
 			&& msm_fb_pdata->is_partial_mode_supported()) {
+			pr_warn("%s: MSMFB_PREPARE_FOR_RESUME DEPRECATED\n",
+				__func__);
+		}
+		break;
 
-			lock_panel_mutex(mfd);
-			ret = copy_from_user(&mfd->resume_cfg,
-						(void __user *)arg,
-						sizeof(mfd->resume_cfg));
-			unlock_panel_mutex(mfd);
-			if (ret) {
-				pr_err("%s: MSMFB_PREPARE_FOR_RESUME failed\n",
+	case MSMFB_QUICKDRAW_INIT:
+		if (msm_fb_pdata
+			&& msm_fb_pdata->is_quickdraw_enabled
+			&& msm_fb_pdata->is_quickdraw_enabled()) {
+			ret = msm_fb_quickdraw_init();
+			if (ret)
+				pr_err("%s: MSMFB_QUICKDRAW_INIT failed (ret=%d)\n",
+					__func__, ret);
+		} else
+			return -EINVAL;
+		break;
+
+	case MSMFB_QUICKDRAW_ADD_BUFFER:
+		if (msm_fb_pdata
+			&& msm_fb_pdata->is_quickdraw_enabled
+			&& msm_fb_pdata->is_quickdraw_enabled()) {
+			struct msmfb_quickdraw_buffer_data data;
+			if (copy_from_user(&data, (void __user *)arg,
+				sizeof(struct msmfb_quickdraw_buffer_data))) {
+				pr_err("%s: MSMFB_QUICKDRAW_ADD_BUFFER copy_from_user failed\n",
 					__func__);
 				return -EFAULT;
 			}
-			pr_info("%s: MSMFB_PREPARE_FOR_RESUME(%d, %d, %d)\n",
-				__func__,
-				mfd->resume_cfg.partial,
-				mfd->resume_cfg.panel_state,
-				mfd->resume_cfg.keep_hidden);
-		}
+			ret = msm_fb_quickdraw_create_buffer(&data);
+			if (ret)
+				pr_err("%s: MSMFB_QUICKDRAW_ADD_BUFFER failed (ret=%d)\n",
+					__func__, ret);
+		} else
+			return -EINVAL;
+		break;
+
+	case MSMFB_QUICKDRAW_REMOVE_BUFFER:
+	case MSMFB_QUICKDRAW_LOCK_BUFFER:
+	case MSMFB_QUICKDRAW_UNLOCK_BUFFER:
+		if (msm_fb_pdata
+			&& msm_fb_pdata->is_quickdraw_enabled
+			&& msm_fb_pdata->is_quickdraw_enabled()) {
+			int buffer_id;
+			if (copy_from_user(&buffer_id, (void __user *)arg,
+				sizeof(int))) {
+				pr_err("%s: MSMFB_QUICKDRAW (cmd: 0x%x) copy_from_user failed\n",
+					__func__, cmd);
+				return -EFAULT;
+			}
+
+			if (cmd == MSMFB_QUICKDRAW_REMOVE_BUFFER)
+				ret = msm_fb_quickdraw_destroy_buffer(
+					buffer_id);
+			else if (cmd == MSMFB_QUICKDRAW_LOCK_BUFFER)
+				ret = msm_fb_quickdraw_lock_buffer(buffer_id);
+			else if (cmd == MSMFB_QUICKDRAW_UNLOCK_BUFFER)
+				ret = msm_fb_quickdraw_unlock_buffer(buffer_id);
+
+			if (ret)
+				pr_err("%s: MSMFB_QUICKDRAW (cmd: 0x%x) failed (ret=%d)\n",
+					__func__, cmd, ret);
+		} else
+			return -EINVAL;
 		break;
 
 	default:

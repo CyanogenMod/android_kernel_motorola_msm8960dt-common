@@ -1352,6 +1352,7 @@ static struct mdm_platform_data sglte_platform_data = {
 	.ramdump_timeout_ms = 600000,
 	.no_powerdown_after_ramdumps = 1,
 	.image_upgrade_supported = 1,
+	.subsys_name = "external_modem"
 };
 
 #define MSM_TSIF0_PHYS			(0x18200000)
@@ -3480,6 +3481,10 @@ void __init msm8960_cdp_init(void)
 	if (socinfo_get_platform_subtype() == PLATFORM_SUBTYPE_SGLTE) {
 		mdm_sglte_device.dev.platform_data = &sglte_platform_data;
 		platform_device_register(&mdm_sglte_device);
+	}
+	if (machine_is_msm8960_mtp() || machine_is_msm8960_fluid() ||
+		machine_is_msm8960_cdp()) {
+		platform_device_register(&msm_dev_avtimer_device);
 	}
 	msm_pm_set_tz_retention_flag(1);
 

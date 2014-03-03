@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -791,7 +791,10 @@ limCreateTimers(tpAniSirGlobal pMac)
         tx_timer_delete(&pMac->lim.limTimers.gLimActiveToPassiveChannelTimer);
 
         if(NULL != pMac->lim.gLimPreAuthTimerTable.pTable)
+        {
             palFreeMemory(pMac->hHdd, pMac->lim.gLimPreAuthTimerTable.pTable);
+            pMac->lim.gLimPreAuthTimerTable.pTable = NULL;
+        }
 
         return TX_TIMER_ERROR;
 
@@ -1435,7 +1438,7 @@ limDeactivateAndChangeTimer(tpAniSirGlobal pMac, tANI_U32 timerId)
             }
             else
             {
-                limLog(pMac, LOGE, FL("Deactivated probe after hb timer"));
+                limLog(pMac, LOG1, FL("Deactivated probe after hb timer"));
             }
 
             if (wlan_cfgGetInt(pMac, WNI_CFG_PROBE_AFTER_HB_FAIL_TIMEOUT,

@@ -968,7 +968,7 @@ static void __init cpufreq_table_init(void)
 		int i, freq_cnt = 0;
 		/* Construct the freq_table tables from acpu_freq_tbl. */
 		for (i = 0; drv.acpu_freq_tbl[i].speed.khz != 0
-				&& freq_cnt < ARRAY_SIZE(*freq_table); i++) {
+				&& freq_cnt < ARRAY_SIZE(*freq_table)-1; i++) {
 			if (drv.acpu_freq_tbl[i].use_for_scaling) {
 				freq_table[cpu][freq_cnt].index = freq_cnt;
 				freq_table[cpu][freq_cnt].frequency
@@ -1095,9 +1095,11 @@ static int __init get_pvs_bin(u32 pte_efuse)
 
 	if (pvs_bin == 0x7) {
 		pvs_bin = 0;
-		dev_warn(drv.dev, "ACPU PVS: Defaulting to %d\n", pvs_bin);
+		dev_warn(drv.dev, "ACPU PVS: Defaulting to %d (fuse %X)\n",
+							pvs_bin, pte_efuse);
 	} else {
-		dev_info(drv.dev, "ACPU PVS: %d\n", pvs_bin);
+		dev_info(drv.dev, "ACPU PVS: %d (fuse %X)\n",
+							pvs_bin, pte_efuse);
 	}
 
 	return pvs_bin;

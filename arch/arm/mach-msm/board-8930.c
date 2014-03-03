@@ -1321,6 +1321,7 @@ static struct mdm_platform_data sglte_platform_data = {
 	.ramdump_timeout_ms = 600000,
 	.no_powerdown_after_ramdumps = 1,
 	.image_upgrade_supported = 1,
+	.subsys_name = "external_modem",
 };
 
 static struct platform_device *mdm_devices[] __initdata = {
@@ -3069,6 +3070,8 @@ static void __init msm8930_cdp_init(void)
 #endif
 	msm8930_i2c_init();
 	msm8930_init_gpu();
+	if (cpu_is_msm8930ab())
+		msm8930ab_update_krait_spm();
 	msm_spm_init(msm_spm_data, ARRAY_SIZE(msm_spm_data));
 	msm_spm_l2_init(msm_spm_l2_data);
 	msm8930_init_buses();
