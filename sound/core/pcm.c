@@ -95,6 +95,8 @@ static int snd_pcm_control_ioctl(struct snd_card *card,
 		{
 			int device;
 
+			snd_printd(KERN_ERR "[SND_DEBUG] SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE\n");
+
 			if (get_user(device, (int __user *)arg))
 				return -EFAULT;
 			mutex_lock(&register_mutex);
@@ -113,6 +115,8 @@ static int snd_pcm_control_ioctl(struct snd_card *card,
 			struct snd_pcm_str *pstr;
 			struct snd_pcm_substream *substream;
 			int err;
+
+			snd_printd(KERN_ERR "[SND_DEBUG] SNDRV_CTL_IOCTL_PCM_INFO\n");
 
 			info = (struct snd_pcm_info __user *)arg;
 			if (get_user(device, &info->device))
@@ -154,7 +158,9 @@ static int snd_pcm_control_ioctl(struct snd_card *card,
 	case SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE:
 		{
 			int val;
-			
+
+			snd_printd(KERN_ERR "[SND_DEBUG] SNDRV_CTL_IOCTL_PCM_PREFER_SUBDEVICE\n");
+
 			if (get_user(val, (int __user *)arg))
 				return -EFAULT;
 			control->prefer_pcm_subdevice = val;
@@ -925,12 +931,24 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 	int prefer_subdevice = -1;
 	size_t size;
 
+#ifdef CONFIG_SND_DEBUG
+	char buf[64], *cp;
+#endif
+
 	if (snd_BUG_ON(!pcm || !rsubstream))
 		return -ENXIO;
 	*rsubstream = NULL;
 	pstr = &pcm->streams[stream];
 	if (pstr->substream == NULL || pstr->substream_count == 0)
 		return -ENODEV;
+
+#ifdef CONFIG_SND_DEBUG
+	cp = d_path(&file->f_path, buf, sizeof(buf));
+	if (!IS_ERR(cp))
+		snd_printd(KERN_ERR "[SND_DEBUG] pcm.c::snd_pcm_attach_substream(%s)\n", cp);
+	else
+		snd_printd(KERN_ERR "[SND_DEBUG] pcm.c::snd_pcm_attach_substream(null)\n");
+#endif
 
 	card = pcm->card;
 	read_lock(&card->ctl_files_rwlock);
@@ -1040,6 +1058,8 @@ void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 	if (PCM_RUNTIME_CHECK(substream))
 		return;
 	runtime = substream->runtime;
+
+	snd_printd(KERN_ERR "[SND_DEBUG] pcm.c::snd_pcm_detach_substream\n");
 	if (runtime->private_free != NULL)
 		runtime->private_free(runtime);
 	snd_free_pages((void*)runtime->status,
@@ -1171,6 +1191,8 @@ static int snd_pcm_dev_disconnect(struct snd_device *device)
 	struct snd_pcm_notify *notify;
 	struct snd_pcm_substream *substream;
 	int cidx, devtype;
+
+	snd_printd(KERN_ERR "[SND_DEBUG] pcm.c::snd_pcm_dev_disconnect\n");
 
 	mutex_lock(&register_mutex);
 	if (list_empty(&pcm->list))

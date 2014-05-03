@@ -897,10 +897,21 @@ static int snd_ctl_elem_write(struct snd_card *card, struct snd_ctl_file *file,
 			up_read(&card->controls_rwsem);
 			snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_VALUE,
 				       &control->id);
+
+			snd_printd(KERN_ERR "WRITE [ %s | %s | value.integer = %ld, value.integer64 = %lld,value.enumerated = %d, value.bytes = %s]\n",
+				card->id, kctl->id.name, control->value.integer.value[0],
+				control->value.integer64.value[0], control->value.enumerated.item[0],
+				control->value.bytes.data);
+
 			return 0;
 		}
 	}
 	up_read(&card->controls_rwsem);
+
+	snd_printd(KERN_ERR "WRITE [ %s | %s | value.integer = %ld, value.integer64 = %lld, value.enumerated = %d, value.bytes = %s] == %d\n",
+		card->id, kctl->id.name, control->value.integer.value[0], control->value.integer64.value[0],
+		control->value.enumerated.item[0], control->value.bytes.data, result);
+
 	return result;
 }
 

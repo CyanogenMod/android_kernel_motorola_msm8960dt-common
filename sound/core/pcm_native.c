@@ -1198,6 +1198,8 @@ static int snd_pcm_resume(struct snd_pcm_substream *substream)
 	struct snd_card *card = substream->pcm->card;
 	int res;
 
+	snd_printd(KERN_ERR "[SND_DEBUG] pcm_native.c::snd_pcm_prepare\n");
+
 	snd_power_lock(card);
 	if ((res = snd_power_wait(card, SNDRV_CTL_POWER_D0)) >= 0)
 		res = snd_pcm_action_lock_irq(&snd_pcm_action_resume, substream, 0);
@@ -1586,10 +1588,23 @@ static struct file *snd_pcm_file_fd(int fd)
 	struct inode *inode;
 	unsigned int minor;
 
+#ifdef CONFIG_SND_DEBUG
+	char buf[64], *cp;
+#endif
+
 	file = fget(fd);
 	if (!file)
 		return NULL;
 	inode = file->f_path.dentry->d_inode;
+
+#ifdef CONFIG_SND_DEBUG
+	cp = d_path(&file->f_path, buf, sizeof(buf));
+	if (!IS_ERR(cp))
+		snd_printd(KERN_ERR "[SND_DEBUG] pcm_native.c::snd_pcm_file_fd(%s)\n", cp);
+	else
+		snd_printd(KERN_ERR "[SND_DEBUG] pcm_native.c::snd_pcm_file_fd(null)\n");
+#endif
+
 	if (!S_ISCHR(inode->i_mode) ||
 	    imajor(inode) != snd_major) {
 		fput(file);
