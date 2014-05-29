@@ -41,6 +41,7 @@
 #endif
 
 #define FAMILY_ID 0x82
+#define FAMILY_ID_V1 0x81
 
 static int atmxt_probe(struct i2c_client *client,
 		const struct i2c_device_id *id);
@@ -211,10 +212,10 @@ static int atmxt_probe_ic(struct atmxt_driver_data *dd)
 		return err;
 	}
 
-	if (infoblk[0] != FAMILY_ID) {
-		printk(KERN_ERR "%s: Family ID mismatch:"
-			" expected 0x%02x actual is 0x%02x\n",
-			__func__, FAMILY_ID, infoblk[0]);
+	if (infoblk[0] != FAMILY_ID && infoblk[0] != FAMILY_ID_V1) {
+		printk(KERN_ERR "%s: Family ID mismatch:" \
+			" expected 0x%02x or 0x%02x actual is 0x%02x\n",
+			__func__, FAMILY_ID_V1, FAMILY_ID, infoblk[0]);
 		return -EIO;
 	}
 
@@ -1082,7 +1083,7 @@ static int atmxt_register_inputs(struct atmxt_driver_data *dd,
 		dd->rdat->axis[i] = ATMXT_ABS_RESERVED;
 
 	input_set_events_per_packet(dd->in_dev,
-		ATMXT_MAX_TOUCHES * (ARRAY_SIZE(dd->rdat->axis) + 1));
+		(ATMXT_MAX_TOUCHES * (ARRAY_SIZE(dd->rdat->axis) + 1))*2);
 
 	err = input_register_device(dd->in_dev);
 	if (err < 0) {

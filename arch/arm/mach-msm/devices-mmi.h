@@ -17,6 +17,7 @@
 
 extern struct platform_device mmi_msm8960_device_qup_i2c_gsbi4;
 extern struct platform_device mmi_msm8960_device_qup_i2c_gsbi8;
+extern struct platform_device mmi_msm8960_device_qup_i2c_gsbi12;
 
 extern struct platform_device mmi_msm8960_device_uart_gsbi2;
 extern struct platform_device mmi_msm8960_device_uart_gsbi5;
@@ -32,4 +33,5 @@ extern struct platform_device mmi_factory_device;
 extern struct platform_device mmi_device_ext_5v_vreg;
 extern struct platform_device mmi_alsa_to_h2w_hs_device;
 extern struct platform_device mmi_bq5101xb_device;
+extern struct platform_device msm8960_device_uart_gsbi;
 #endif

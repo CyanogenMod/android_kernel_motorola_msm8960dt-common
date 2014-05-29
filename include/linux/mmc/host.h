@@ -297,6 +297,7 @@ struct mmc_host {
 #ifdef CONFIG_MMC_DEBUG
 	unsigned int		removed:1;	/* host is being removed */
 #endif
+	unsigned int		card_bad:1;	/* the card is bad; ignore it */
 
 	int			rescan_disable;	/* disable card detection */
 
@@ -311,6 +312,8 @@ struct mmc_host {
 	struct wake_lock	detect_wake_lock;
 	int			detect_change;	/* card detect flag */
 	struct mmc_hotplug	hotplug;
+
+	struct wake_lock	recovery_wake_lock;
 
 	const struct mmc_bus_ops *bus_ops;	/* current bus driver */
 	unsigned int		bus_refs;	/* reference counter */

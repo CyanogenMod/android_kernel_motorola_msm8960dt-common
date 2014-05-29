@@ -54,7 +54,7 @@ struct platform_device *i2c_dt_lookup_table[] __initdata = {
 	&msm8960_device_qup_i2c_gsbi9,
 	&msm8960_device_qup_i2c_gsbi10,
 	NULL,
-	&msm8960_device_qup_i2c_gsbi12,
+	NULL,
 };
 
 struct platform_device *spi_dt_lookup_table[] __initdata = {
@@ -281,24 +281,26 @@ static void __init mmi_init_uart_dev_from_dt(struct device_node *node,
 
 	if (of_property_read_u32(node, "uart_line", &line)) {
 		pr_err("%s: uart_line property not found\n", __func__);
-		goto devreg;
+		goto out;
 	}
 
 	pdata = kzalloc(sizeof(struct msm_serial_hslite_platform_data),
 			GFP_KERNEL);
 	if (!pdata) {
 		pr_err("%s: Couldn't allocate platform data...\n", __func__);
-		goto devreg;
+		goto out;
 	}
 
 	pdata->line = (int)line;
 	dev->dev.platform_data = pdata;
 
-devreg:
 	if (platform_device_register(dev)) {
 		kfree(pdata);
 		pr_err("%s: Failed to register platform device!\n", __func__);
 	}
+
+out:
+	return;
 }
 
 void __init mmi_init_gsbi_devices_from_dt(void)

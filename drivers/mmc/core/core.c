@@ -159,10 +159,13 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 #ifdef CONFIG_MMC_PERF_PROFILING
 	ktime_t diff;
 #endif
-	if (host->card && host->clk_scaling.enable)
+	if (host->card && host->clk_scaling.enable) {
 		host->clk_scaling.busy_time_us +=
 			ktime_to_us(ktime_sub(ktime_get(),
 					host->clk_scaling.start_busy));
+		if (err)
+			host->card->request_errors++;
+	}
 
 	if (err && cmd->retries && mmc_host_is_spi(host)) {
 		if (cmd->resp[0] & R1_SPI_ILLEGAL_COMMAND)
@@ -304,6 +307,9 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 		mmc_clk_scaling(host, false);
 		host->clk_scaling.start_busy = ktime_get();
 	}
+
+	if (host->card)
+		host->card->requests++;
 
 	host->ops->request(host, mrq);
 }
@@ -2032,8 +2038,18 @@ int mmc_can_erase(struct mmc_card *card)
 }
 EXPORT_SYMBOL(mmc_can_erase);
 
+#define TOSHIBA_MANFID 0x11
 int mmc_can_trim(struct mmc_card *card)
 {
+	/*
+	* Toshiba 24nm (eMMC v4.41) parts perform poorly when issued TRIM
+	* commands because they do synchronous garbage collection.   Falling
+	* back on normal erase commands works around this, since the part will
+	* only do a logical remapping of the erased block.  This is resolved
+	* on their 19nm (eMMC v4.5) parts.
+	*/
+	if (card->cid.manfid == TOSHIBA_MANFID && card->ext_csd.rev == 5)
+		return 0;
 	if (card->ext_csd.sec_feature_support & EXT_CSD_SEC_GB_CL_EN)
 		return 1;
 	return 0;
@@ -2761,6 +2777,13 @@ void mmc_rescan(struct work_struct *work)
 	 */
 	mmc_bus_put(host);
 	mmc_bus_get(host);
+
+	/* Don't redetect if the card has failed too many times */
+	if (host->card_bad) {
+		pr_err("%s: ignoring bad card\n", mmc_hostname(host));
+		mmc_bus_put(host);
+		goto out;
+	}
 
 	/* if there still is a card present, stop here */
 	if (host->bus_ops != NULL) {

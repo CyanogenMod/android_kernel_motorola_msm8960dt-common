@@ -96,6 +96,14 @@ static inline bool aca_enabled(void)
 #endif
 }
 
+static inline bool vbus_power_control_enabled(struct msm_otg *motg)
+{
+	if (motg->pdata->otg_control == OTG_ACCY_CONTROL)
+		return false;
+	else
+		return true;
+}
+
 static const int vdd_val[VDD_TYPE_MAX][VDD_VAL_MAX] = {
 		{  /* VDD_CX CORNER Voting */
 			[VDD_NONE]	= RPM_VREG_CORNER_NONE,
@@ -108,6 +116,19 @@ static const int vdd_val[VDD_TYPE_MAX][VDD_VAL_MAX] = {
 			[VDD_MAX]	= USB_PHY_VDD_DIG_VOL_MAX,
 		},
 };
+
+static bool factory_mode;
+static bool  msm_pmic_mmi_factory_mode(void)
+{
+	struct device_node *np = of_find_node_by_path("/chosen");
+	bool factory = false;
+
+	if (np)
+		factory = of_property_read_bool(np, "mmi,factory-cable");
+
+	of_node_put(np);
+	return factory;
+}
 
 static int msm_hsusb_ldo_init(struct msm_otg *motg, int init)
 {
@@ -465,6 +486,7 @@ static int msm_otg_link_reset(struct msm_otg *motg)
 	writel_relaxed(0x0, USB_AHBBURST);
 	writel_relaxed(0x08, USB_AHBMODE);
 
+	ulpi_init(motg);
 	return 0;
 }
 
@@ -529,6 +551,9 @@ static int msm_otg_reset(struct usb_phy *phy)
 			ULPI_SET(ULPI_PWR_CLK_MNG_REG));
 		/* Enable PMIC pull-up */
 		pm8xxx_usb_id_pullup(1);
+	} else if (pdata->otg_control == OTG_ACCY_CONTROL) {
+			ulpi_write(phy, OTG_COMP_DISABLE,
+			ULPI_SET(ULPI_PWR_CLK_MNG_REG));
 	}
 
 	return 0;
@@ -1317,6 +1342,9 @@ static void msm_hsusb_vbus_power(struct msm_otg *motg, bool on)
 	int ret;
 	static bool vbus_is_on;
 
+	if (!vbus_power_control_enabled(motg))
+		return;
+
 	if (vbus_is_on == on)
 		return;
 
@@ -1495,6 +1523,11 @@ static int msm_otg_set_peripheral(struct usb_otg *otg,
 	otg->gadget = gadget;
 	dev_dbg(otg->phy->dev, "peripheral driver registered w/ tranceiver\n");
 
+	/* We rely on the accessory detection driver to trigger any state
+	* changes */
+	if (motg->pdata->otg_control == OTG_ACCY_CONTROL)
+		goto done;
+
 	/*
 	 * Kick the state machine work, if host is not supported
 	 * or host is already registered with us.
@@ -1504,6 +1537,7 @@ static int msm_otg_set_peripheral(struct usb_otg *otg,
 		queue_work(system_nrt_wq, &motg->sm_work);
 	}
 
+done:
 	return 0;
 }
 
@@ -2258,6 +2292,12 @@ static void msm_otg_init_sm(struct msm_otg *motg)
 			 * driver initialization. Wait for it.
 			 */
 			wait_for_completion(&pmic_vbus_init);
+		} else if (pdata->otg_control == OTG_ACCY_CONTROL) {
+			/* start with nothing connected */
+			pr_debug("%s: setting default inputs for ACCY mode\n",
+					__func__);
+			set_bit(ID, &motg->inputs);
+			clear_bit(B_SESS_VLD, &motg->inputs);
 		}
 		break;
 	case USB_HOST:
@@ -2413,6 +2453,13 @@ static void msm_otg_sm_work(struct work_struct *w)
 			msm_otg_reset(otg->phy);
 			pm_runtime_put_noidle(otg->phy->dev);
 			pm_runtime_suspend(otg->phy->dev);
+			/* Re-enable ID IRQ's if they are masked */
+			if (motg->pdata->pmic_id_irq &&
+				atomic_read(&motg->pmic_id_masked) &&
+				!factory_mode) {
+				enable_irq(motg->pdata->pmic_id_irq);
+				atomic_set(&motg->pmic_id_masked, 0);
+			}
 		}
 		break;
 	case OTG_STATE_B_SRP_INIT:
@@ -2877,6 +2924,9 @@ static irqreturn_t msm_otg_irq(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
+	if (motg->pdata->otg_control == OTG_ACCY_CONTROL)
+		return IRQ_NONE;
+
 	usbsts = readl(USB_USBSTS);
 	otgsc = readl(USB_OTGSC);
 
@@ -3057,6 +3107,17 @@ static void msm_otg_set_vbus_state(int online)
 		motg->sm_work_pending = true;
 	else
 		queue_work(system_nrt_wq, &motg->sm_work);
+
+	/*
+	 * Disable ID IRQ's when not in factory mode when
+	 * a Vbus related event is going on.
+	 */
+	if (motg->pdata->pmic_id_irq &&
+		!atomic_read(&motg->pmic_id_masked) &&
+		!factory_mode) {
+		disable_irq(motg->pdata->pmic_id_irq);
+		atomic_set(&motg->pmic_id_masked, 1);
+	}
 }
 static int factory_cable;
 static int msm_pmic_is_factory_cable(struct msm_otg *motg)
@@ -3152,6 +3213,110 @@ static irqreturn_t msm_pmic_id_irq(int irq, void *data)
 				msecs_to_jiffies(MSM_PMIC_ID_STATUS_DELAY));
 
 	return IRQ_HANDLED;
+}
+
+static const char *usb_event_name(enum usb_phy_events event)
+{
+	if (event == USB_EVENT_NONE)
+		return "DISCONNECTED";
+	if (event == USB_EVENT_VBUS)
+		return "VBUS";
+	if (event == USB_EVENT_ID)
+		return "ID";
+	if (event == USB_EVENT_CHARGER)
+		return "CHARGER";
+	return "INVALID";
+}
+
+static int msm_otg_accy_notify(struct notifier_block *nb,
+			unsigned long event, void *ignore)
+{
+	struct msm_otg *motg;
+	struct usb_otg *otg;
+	enum usb_otg_state req_state;
+
+	motg = container_of(nb, struct msm_otg, accy_nb);
+	/*otg_phy = &motg->phy;*/
+	otg = motg->phy.otg;
+	dev_info(otg->phy->dev, "received %s event\n", usb_event_name(event));
+
+	if (event == USB_EVENT_ID)
+		req_state = OTG_STATE_A_HOST;
+	else if (event == USB_EVENT_VBUS)
+		req_state = OTG_STATE_B_PERIPHERAL;
+	else
+		req_state = OTG_STATE_B_IDLE;
+
+	dev_info(otg->phy->dev, ":%s --> %s\n",
+		otg_state_string(otg->phy->state), otg_state_string(req_state));
+
+	switch (req_state) {
+	case OTG_STATE_B_IDLE:
+		switch (otg->phy->state) {
+		case OTG_STATE_UNDEFINED:
+			/* set when accy driver init detection completes */
+			otg->phy->state = OTG_STATE_B_IDLE;
+			if (event != USB_EVENT_CHARGER) {
+				pm_request_idle(otg->phy->dev);
+				goto out;
+			}
+		case OTG_STATE_B_IDLE:
+			if (event == USB_EVENT_CHARGER) {
+				if (motg->chg_type != USB_DCP_CHARGER) {
+					set_bit(ID, &motg->inputs);
+					set_bit(B_SESS_VLD, &motg->inputs);
+					motg->chg_state = USB_CHG_STATE_DETECTED;
+					motg->chg_type = USB_DCP_CHARGER;
+					break;
+				} else
+					goto out;
+			} else if (motg->chg_type != USB_DCP_CHARGER)
+				goto out;
+		case OTG_STATE_A_HOST:
+		case OTG_STATE_A_WAIT_BCON:
+		case OTG_STATE_B_PERIPHERAL:
+			set_bit(ID, &motg->inputs);
+			clear_bit(B_SESS_VLD, &motg->inputs);
+			break;
+		default:
+			goto out;
+		}
+		break;
+	case OTG_STATE_B_PERIPHERAL:
+		switch (otg->phy->state) {
+		case OTG_STATE_UNDEFINED:
+			/* set when accy driver init detection completes */
+			otg->phy->state = OTG_STATE_B_IDLE;
+		case OTG_STATE_B_IDLE:
+		case OTG_STATE_A_HOST:
+			set_bit(ID, &motg->inputs);
+			set_bit(B_SESS_VLD, &motg->inputs);
+			motg->chg_state = USB_CHG_STATE_DETECTED;
+			motg->chg_type = USB_SDP_CHARGER;
+			break;
+		default:
+			goto out;
+		}
+		break;
+	case OTG_STATE_A_HOST:
+		switch (otg->phy->state) {
+		case OTG_STATE_UNDEFINED:
+			/* set when accy driver init detection completes */
+			otg->phy->state = OTG_STATE_B_IDLE;
+		case OTG_STATE_B_IDLE:
+		case OTG_STATE_B_PERIPHERAL:
+			clear_bit(ID, &motg->inputs);
+			break;
+		default:
+			goto out;
+		}
+		break;
+	default:
+		goto out;
+	}
+	queue_work(system_nrt_wq, &motg->sm_work);
+out:
+	return 0;
 }
 
 static int msm_otg_mode_show(struct seq_file *s, void *unused)
@@ -3503,6 +3668,7 @@ static int msm_otg_setup_devices(struct platform_device *ofdev,
 	static struct platform_device *gadget_pdev;
 	static struct platform_device *host_pdev;
 	int retval = 0;
+
 
 	if (!init) {
 		if (gadget_pdev)
@@ -3887,9 +4053,38 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 					goto free_pmic_id_irq;
 				}
 			}
+#ifdef CONFIG_EMU_DETECTION
+			/*
+			 * This is a workaround for the PMIC ID IRQ constantly
+			 * firing after disconnecting a cable. The IRQ is not
+			 * used by any MMI devices so we just disable it for
+			 * now.
+			 */
+			disable_irq(motg->pdata->pmic_id_irq);
+#endif
 		} else {
 			ret = -ENODEV;
 			dev_err(&pdev->dev, "PMIC IRQ for ID notifications doesn't exist\n");
+			goto remove_sysfs;
+		}
+	} else if (motg->pdata->otg_control == OTG_ACCY_CONTROL) {
+		pr_info("%s: MSM OTG Driver will operate in ACCY CONTROL mode\n",
+			__func__);
+		 /* set up notifier so that accy detect driver can notify otg
+		  * driver when switches between host/peripheral/suspend modes
+		  * are required */
+		/* ATOMIC_INIT_NOTIFIER_HEAD(&motg->accy_nb.notifier_call); */
+		motg->accy_nb.notifier_call = msm_otg_accy_notify;
+		usb_register_notifier(&motg->phy, &motg->accy_nb);
+
+		msm_otg_init_sm(motg);
+
+		/* register accy detection device */
+		ret = platform_device_register(motg->pdata->accy_pdev);
+		if (ret) {
+			pr_err(KERN_ERR "%s: platform device"\
+				" registration for accy det device failed,"\
+				" ret %d\n", __func__, ret);
 			goto remove_sysfs;
 		}
 	}
@@ -3917,6 +4112,10 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 
 		if (motg->pdata->otg_control == OTG_PHY_CONTROL)
 			motg->caps = ALLOW_PHY_RETENTION;
+
+		if (motg->pdata->otg_control == OTG_ACCY_CONTROL)
+			motg->caps = ALLOW_PHY_POWER_COLLAPSE |
+				ALLOW_PHY_RETENTION;
 	}
 
 	if (motg->pdata->enable_lpm_on_dev_suspend)
@@ -3937,6 +4136,7 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 	}
 
 	factory_cable = msm_pmic_is_factory_cable(motg);
+	factory_mode = msm_pmic_mmi_factory_mode();
 
 	return 0;
 
@@ -3983,6 +4183,7 @@ free_otg:
 	kfree(motg->phy.otg);
 free_motg:
 	kfree(motg);
+
 	return ret;
 }
 

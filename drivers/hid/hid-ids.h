@@ -6,6 +6,7 @@
  *  Copyright (c) 2005 Michael Haboustak <mike-@cinci.rr.com> for Concept2, Inc
  *  Copyright (c) 2006-2007 Jiri Kosina
  *  Copyright (c) 2007 Paul Walmsley
+ *  Copyright (c) 2011 Motorola, Inc.
  */
 
 /*
@@ -561,6 +562,15 @@
 
 #define USB_VENDOR_ID_MSI		0x1770
 #define USB_DEVICE_ID_MSI_GX680R_LED_PANEL	0xff00
+#define USB_VENDOR_ID_MOTOROLA		0x22b8
+#define USB_DEVICE_ID_HD_DOCK		0x0938
+#define USB_DEVICE_ID_MOT_KB_1G		0x093d
+#define USB_DEVICE_ID_MM_MULTITOUCH_1	0x0942
+#define USB_DEVICE_ID_MM_MULTITOUCH_2	0x0943
+#define USB_DEVICE_ID_MM_MULTITOUCH_3	0x0944
+#define USB_DEVICE_ID_MM_MULTITOUCH_4	0x0945
+#define USB_DEVICE_ID_MM_MULTITOUCH_5	0x0946
+#define USB_DEVICE_ID_MM_MULTITOUCH_6	0x0947
 
 #define USB_VENDOR_ID_NATIONAL_SEMICONDUCTOR 0x0400
 #define USB_DEVICE_ID_N_S_HARMONY	0xc359

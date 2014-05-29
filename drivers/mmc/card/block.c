@@ -123,6 +123,9 @@ struct mmc_blk_data {
 	struct device_attribute power_ro_lock;
 	struct device_attribute num_wr_reqs_to_start_packing;
 	struct device_attribute bkops_check_threshold;
+	struct device_attribute total_requests;
+	struct device_attribute total_request_errors;
+	struct device_attribute current_health;
 	int	area_type;
 };
 
@@ -365,6 +368,53 @@ bkops_check_threshold_store(struct device *dev,
 exit:
 	mmc_blk_put(md);
 	return count;
+}
+
+static ssize_t
+total_requests_show(struct device *dev, struct device_attribute *attr,
+		    char *buf)
+{
+	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
+	struct mmc_card *card = md->queue.card;
+	int ret;
+
+	ret = snprintf(buf, PAGE_SIZE, "%llu\n", card->requests);
+
+	mmc_blk_put(md);
+	return ret;
+}
+
+static ssize_t
+total_request_errors_show(struct device *dev, struct device_attribute *attr,
+			  char *buf)
+{
+	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
+	struct mmc_card *card = md->queue.card;
+	int ret;
+
+	ret = snprintf(buf, PAGE_SIZE, "%llu\n", card->request_errors);
+
+	mmc_blk_put(md);
+	return ret;
+}
+
+static ssize_t
+current_health_show(struct device *dev, struct device_attribute *attr,
+		    char *buf)
+{
+	struct mmc_blk_data *md = mmc_blk_get(dev_to_disk(dev));
+	struct mmc_card *card = md->queue.card;
+	int ret;
+
+	if (card->failures > 0)
+		ret = snprintf(buf, PAGE_SIZE, "%u\n",
+			       (card->successes * MMC_ERROR_FAILURE_RATIO) /
+				card->failures);
+	else
+		ret = snprintf(buf, PAGE_SIZE, "100\n");
+
+	mmc_blk_put(md);
+	return ret;
 }
 
 static int mmc_blk_open(struct block_device *bdev, fmode_t mode)
@@ -904,13 +954,69 @@ static int mmc_blk_cmd_recovery(struct mmc_card *card, struct request *req,
 	return ERR_CONTINUE;
 }
 
+/*
+ * Perform a hardware reset of a device that has experienced an error.  Returns
+ * 0 on the first instance of a request type and returns that type on
+ * subsequent instances if the card is removable (-EEXIST otherwise).  Returns
+ * -EIO if the maximum number of attempts has been exceeded or another value
+ * less than zero if an unexpected error has occured.
+ */
 static int mmc_blk_reset(struct mmc_blk_data *md, struct mmc_host *host,
-			 int type)
+			 unsigned int type, int status)
 {
+	struct mmc_card *card = host->card;
+	int result = 0;
 	int err;
 
-	if (md->reset_done & type)
-		return -EEXIST;
+	/*
+	 * First reset for a request type is always free, so fall through.
+	 */
+	if (md->reset_done & type) {
+		/*
+		 * Non-removable cards are allowed one reset and then we want
+		 * to report the failure as an I/O error.
+		 */
+		if (host->caps & MMC_CAP_NONREMOVABLE)
+			return -EEXIST;
+
+		/*
+		 * Keep track of removable cards that are not stable and drop
+		 * them if the failure-to-success ratio is too high or the
+		 * total number of failures during the period is 10x the ratio.
+		 */
+		card->failures++;
+		if (card->failures >= (card->successes + 1) *
+				      MMC_ERROR_FAILURE_RATIO ||
+		    card->failures >= MMC_ERROR_FAILURE_RATIO * 10) {
+			pr_warning("%s: giving up on card (%u/%u, %llu/%llu)\n",
+				   mmc_hostname(host),
+				   card->failures, card->successes,
+				   card->request_errors, card->requests);
+			host->card_bad = 1;
+			mmc_card_set_removed(card);
+			mmc_detect_change(host, 0);
+			return -EIO;
+		}
+
+		/*
+		 * Hide the failure and trigger a retry.
+		 */
+		result = type & INT_MAX;
+
+		/*
+		 * For some failures, we want to report an I/O error rather
+		 * than hide it.  This will increase the chances that cards
+		 * with a bad area will function longer before being dropped.
+		 */
+		if (status == MMC_BLK_DATA_ERR ||
+		    status == MMC_BLK_ECC_ERR)
+			result = -EEXIST;
+
+		pr_info("%s: recovering card (%d); health: %u/%u, %llu/%llu\n",
+			mmc_hostname(host), status,
+			card->failures, card->successes,
+			card->request_errors, card->requests);
+	}
 
 	md->reset_done |= type;
 	err = mmc_hw_reset(host);
@@ -929,12 +1035,29 @@ static int mmc_blk_reset(struct mmc_blk_data *md, struct mmc_host *host,
 			return -ENODEV;
 		}
 	}
-	return err;
+
+	return result;
 }
 
-static inline void mmc_blk_reset_success(struct mmc_blk_data *md, int type)
+static inline void mmc_blk_reset_success(struct mmc_blk_data *md,
+					 struct mmc_host *host,
+					 unsigned int type)
 {
+	struct mmc_card *card = host->card;
+
 	md->reset_done &= ~type;
+	if (card->failures > 0) {
+		card->successes++;
+		if (card->successes >= (card->failures + 1) *
+				     MMC_ERROR_FORGIVE_RATIO) {
+			pr_info("%s: forgiving card (%u/%u, %llu/%llu)\n",
+				mmc_hostname(host),
+				card->failures, card->successes,
+				card->request_errors, card->requests);
+			card->failures = 0;
+			card->successes = 0;
+		}
+	}
 }
 
 static int mmc_blk_issue_discard_rq(struct mmc_queue *mq, struct request *req)
@@ -974,10 +1097,10 @@ retry:
 	}
 	err = mmc_erase(card, from, nr, arg);
 out:
-	if (err == -EIO && !mmc_blk_reset(md, card->host, type))
+	if (err == -EIO && mmc_blk_reset(md, card->host, type, 0) >= 0)
 		goto retry;
 	if (!err)
-		mmc_blk_reset_success(md, type);
+		mmc_blk_reset_success(md, card->host, type);
 	blk_end_request(req, err, blk_rq_bytes(req));
 
 	return err ? 0 : 1;
@@ -1039,10 +1162,10 @@ retry:
 	}
 
 out_retry:
-	if (err && !mmc_blk_reset(md, card->host, type))
+	if (err && mmc_blk_reset(md, card->host, type, 0) >= 0)
 		goto retry;
 	if (!err)
-		mmc_blk_reset_success(md, type);
+		mmc_blk_reset_success(md, card->host, type);
 out:
 	blk_end_request(req, err, blk_rq_bytes(req));
 
@@ -1209,9 +1332,8 @@ static int mmc_blk_err_check(struct mmc_card *card,
 			 * and never leaves the program state.
 			 */
 			if (time_after(jiffies, timeout)) {
-				pr_err("%s: Card stuck in programming state!"\
-					" %s %s\n", mmc_hostname(card->host),
-					req->rq_disk->disk_name, __func__);
+				pr_err("%s: card stuck in programming state\n",
+					mmc_hostname(card->host));
 
 				return MMC_BLK_CMD_ERR;
 			}
@@ -1930,7 +2052,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 	struct mmc_blk_data *md = mq->data;
 	struct mmc_card *card = md->queue.card;
 	struct mmc_blk_request *brq = &mq->mqrq_cur->brq;
-	int ret = 1, disable_multi = 0, retry = 0, type;
+	int ret = 1, disable_multi = 0, retry = 0, type, reset = 0;
 	enum mmc_blk_status status;
 	struct mmc_queue_req *mq_rq;
 	struct request *req;
@@ -1973,7 +2095,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 			/*
 			 * A block was successfully transferred.
 			 */
-			mmc_blk_reset_success(md, type);
+			mmc_blk_reset_success(md, card->host, type);
 
 			if (mq_rq->packed_cmd != MMC_PACKED_NONE) {
 				ret = mmc_blk_end_packed_req(mq_rq);
@@ -1998,28 +2120,26 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 			break;
 		case MMC_BLK_CMD_ERR:
 			ret = mmc_blk_cmd_err(md, card, brq, req, ret);
-			if (!mmc_blk_reset(md, card->host, type))
-				break;
-			goto cmd_abort;
+			if (mmc_blk_reset(md, card->host, type, status) < 0)
+				goto cmd_abort;
+			break;
 		case MMC_BLK_RETRY:
 			if (retry++ < 5)
 				break;
 			/* Fall through */
 		case MMC_BLK_ABORT:
-			if (!mmc_blk_reset(md, card->host, type))
+			if (mmc_blk_reset(md, card->host, type, status) < 0)
+				goto cmd_abort;
+			break;
+		case MMC_BLK_DATA_ERR:
+			reset = mmc_blk_reset(md, card->host, type, status);
+			/* Just try again on the first failure */
+			if (reset == 0)
 				break;
-			goto cmd_abort;
-		case MMC_BLK_DATA_ERR: {
-			int err;
-
-			err = mmc_blk_reset(md, card->host, type);
-			if (!err)
-				break;
-			if (err == -ENODEV ||
-				mq_rq->packed_cmd != MMC_PACKED_NONE)
+			if (reset < 0 && (reset == -ENODEV ||
+				mq_rq->packed_cmd != MMC_PACKED_NONE))
 				goto cmd_abort;
 			/* Fall through */
-		}
 		case MMC_BLK_ECC_ERR:
 			if (brq->data.blocks > 1) {
 				/* Redo read one sector at a time */
@@ -2037,6 +2157,9 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 						brq->data.blksz);
 			if (!ret)
 				goto start_new_req;
+			/* Make sure that ECC errors also get a reset */
+			if (mmc_blk_reset(md, card->host, type, status) < 0)
+				goto cmd_abort;
 			break;
 		case MMC_BLK_NOMEDIUM:
 			goto cmd_abort;
@@ -2060,6 +2183,7 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 						&mq_rq->mmc_active, NULL);
 			}
 		}
+
 	} while (ret);
 
 	return 1;
@@ -2477,8 +2601,44 @@ static int mmc_add_disk(struct mmc_blk_data *md)
 	if (ret)
 		goto bkops_check_threshold_fails;
 
+	md->total_requests.show = total_requests_show;
+	sysfs_attr_init(&md->total_requests.attr);
+	md->total_requests.attr.name = "total_requests";
+	md->total_requests.attr.mode = S_IRUGO;
+	ret = device_create_file(disk_to_dev(md->disk),
+				 &md->total_requests);
+	if (ret)
+		goto total_requests_fails;
+
+	md->total_request_errors.show = total_request_errors_show;
+	sysfs_attr_init(&md->total_request_errors.attr);
+	md->total_request_errors.attr.name = "total_errors";
+	md->total_request_errors.attr.mode = S_IRUGO;
+	ret = device_create_file(disk_to_dev(md->disk),
+				 &md->total_request_errors);
+	if (ret)
+		goto total_request_errors_fails;
+
+	md->current_health.show = current_health_show;
+	sysfs_attr_init(&md->current_health.attr);
+	md->current_health.attr.name = "current_health";
+	md->current_health.attr.mode = S_IRUGO;
+	ret = device_create_file(disk_to_dev(md->disk),
+				 &md->current_health);
+	if (ret)
+		goto current_health_fails;
+
 	return ret;
 
+current_health_fails:
+	device_remove_file(disk_to_dev(md->disk),
+			   &md->total_request_errors);
+total_request_errors_fails:
+	device_remove_file(disk_to_dev(md->disk),
+			   &md->total_requests);
+total_requests_fails:
+	device_remove_file(disk_to_dev(md->disk),
+			   &md->bkops_check_threshold);
 bkops_check_threshold_fails:
 	device_remove_file(disk_to_dev(md->disk),
 			   &md->num_wr_reqs_to_start_packing);

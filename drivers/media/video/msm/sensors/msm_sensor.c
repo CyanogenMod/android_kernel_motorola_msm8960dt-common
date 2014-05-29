@@ -643,6 +643,71 @@ int32_t msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 			else
 				rc = -EFAULT;
 				break;
+		case CFG_GET_SNAPSHOTDATA:
+			if (s_ctrl->func_tbl->sensor_get_exposure_time
+							== NULL) {
+				rc = -EFAULT;
+				break;
+			}
+
+			rc = s_ctrl->func_tbl->sensor_get_exposure_time(
+				s_ctrl,
+				&cdata.cfg.data.exposure_time);
+			if (rc < 0) {
+				pr_err("%s: Unable to get exposure time!\n",
+							__func__);
+				break;
+			}
+
+			cdata.cfg.data.flash = -1;
+			cdata.cfg.data.metering_mode = -1;
+			cdata.cfg.data.light_source = -1;
+			if (copy_to_user((void *)argp, &cdata,
+				sizeof(struct sensor_cfg_data))) {
+				pr_err("%s: error copying cfg_data to user",
+							__func__);
+				rc = -EFAULT;
+			}
+			break;
+
+		case CFG_SET_GAMMA:
+			if (s_ctrl->func_tbl->sensor_set_gamma == NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->sensor_set_gamma(s_ctrl,
+					cdata.cfg.fact_set.gamma_unity);
+			break;
+
+		case CFG_SET_SHARPENING:
+			if (s_ctrl->func_tbl->sensor_set_sharpening == NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->sensor_set_sharpening(s_ctrl,
+					cdata.cfg.fact_set.sharpening);
+			break;
+
+		case CFG_SET_LENSSHADING:
+			if (s_ctrl->func_tbl->sensor_set_lens_shading == NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->sensor_set_lens_shading(s_ctrl,
+					cdata.cfg.fact_set.lens_shading);
+			break;
+
+		case CFG_SET_TARGET_EXPOSURE:
+			if (s_ctrl->func_tbl->sensor_set_target_exposure
+					== NULL) {
+				rc = -EFAULT;
+				break;
+			}
+			rc = s_ctrl->func_tbl->sensor_set_target_exposure(
+					s_ctrl,
+					cdata.cfg.fact_set.target_exposure);
+			break;
+
 		default:
 			rc = -EFAULT;
 			break;

@@ -153,8 +153,14 @@ static __init int load_pm8921_gpios_from_dt(struct pm8xxx_gpio_init **ptr,
 
 		of_node_put(np);
 		if (avail) {
-			pr_debug("%s: OF DT GPIO mux being used\n", __func__);
-			return -EINVAL;
+			pr_info("%s: OF DT GPIO mux being used\n", __func__);
+			/*return -EINVAL;*/
+			/*
+			 Let's use Mixed DT for 8960 devices. Populate common
+			 GPIOs under OF DT node /qcom,msm-pm8921-gpios/mux
+			 and fall through and parse /System@0/PowerIC@0 from
+			 device specific legacy device tree nodes.
+			*/
 		}
 	}
 
@@ -336,6 +342,8 @@ void __init mmi_init_pm8921_gpio_mpp(void)
 	}
 }
 
+extern int get_l17_voltage(void);
+
 void w1_gpio_enable_regulators(int enable)
 {
 	static struct regulator *vdd1;
@@ -352,7 +360,7 @@ void w1_gpio_enable_regulators(int enable)
 	if (enable) {
 		if (!IS_ERR_OR_NULL(vdd1)) {
 			rc = regulator_set_voltage(vdd1,
-						2850000, 2850000);
+						get_l17_voltage(), 2850000);
 			if (!rc) {
 				rc = regulator_enable(vdd1);
 			}

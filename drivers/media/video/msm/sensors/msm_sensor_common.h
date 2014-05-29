@@ -166,6 +166,14 @@ struct msm_sensor_fn_t {
 		 struct sensor_hdr_update_parm_t *);
 	int (*sensor_ctrl_strobe)(struct msm_sensor_ctrl_t *s_ctrl,
 			uint8_t strobe_enable);
+	int32_t (*sensor_get_exposure_time)
+		(struct msm_sensor_ctrl_t *, uint32_t *);
+	int32_t (*sensor_set_gamma) (struct msm_sensor_ctrl_t *, uint8_t);
+	int32_t (*sensor_set_sharpening) (struct msm_sensor_ctrl_t *, uint8_t);
+	int32_t (*sensor_set_lens_shading)
+		(struct msm_sensor_ctrl_t *, uint8_t);
+	int32_t (*sensor_set_target_exposure)
+		(struct msm_sensor_ctrl_t *, uint8_t);
 };
 
 struct msm_sensor_csi_info {

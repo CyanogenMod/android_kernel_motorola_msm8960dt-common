@@ -27,6 +27,10 @@
 #include <linux/of_gpio.h>
 #include <linux/of_platform.h>
 #include <linux/persistent_ram.h>
+#include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/proc_fs.h>
+#include <linux/sysdev.h>
 #include <linux/seq_file.h>
 
 #include <mach/devtree_util.h>
@@ -156,6 +160,132 @@ static void __init mmi_gpiomux_init(struct msm8960_oem_init_ptrs *oem_ptr)
 	of_node_put(node);
 }
 
+static ssize_t cid_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "0x%08X 0x%08X 0x%08X 0x%08X\n",
+			k_atag_tcmd_raw_cid[0], k_atag_tcmd_raw_cid[1],
+			k_atag_tcmd_raw_cid[2], k_atag_tcmd_raw_cid[3]);
+}
+
+static ssize_t csd_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "0x%08X 0x%08X 0x%08X 0x%08X\n",
+			k_atag_tcmd_raw_csd[0], k_atag_tcmd_raw_csd[1],
+			k_atag_tcmd_raw_csd[2], k_atag_tcmd_raw_csd[3]);
+}
+
+static ssize_t ecsd_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{
+	char *d = buf;
+	char b[8];
+	int i = 0;
+
+	while (i < 512) {
+		snprintf(b, 8, "%02X", k_atag_tcmd_raw_ecsd[i]);
+		*d++ = b[0];
+		*d++ = b[1];
+		*d++ = ' ';
+		i++;
+	}
+	*d++ = 10;
+	*d = 0;
+
+	return (512*3) + 1;
+}
+
+static struct kobj_attribute cid_attribute =
+	__ATTR(cid, 0444, cid_show, NULL);
+
+static struct kobj_attribute csd_attribute =
+	__ATTR(csd, 0444, csd_show, NULL);
+
+static struct kobj_attribute ecsd_attribute =
+	__ATTR(ecsd, 0444, ecsd_show, NULL);
+
+static struct attribute *emmc_attrs[] = {
+	&cid_attribute.attr,
+	&csd_attribute.attr,
+	&ecsd_attribute.attr,
+	NULL
+};
+
+static struct attribute_group emmc_attr_group = {
+	.attrs = emmc_attrs,
+};
+
+static int emmc_version_init(void)
+{
+	static struct kobject *emmc_kobj;
+	int retval;
+
+	emmc_kobj = kobject_create_and_add("emmc", NULL);
+	if (!emmc_kobj) {
+		pr_err("%s: failed to create /sys/emmc\n", __func__);
+		return -ENOMEM;
+	}
+
+	retval = sysfs_create_group(emmc_kobj, &emmc_attr_group);
+	if (retval)
+		pr_err("%s: failed for entries under /sys/emmc\n", __func__);
+
+	return retval;
+}
+
+static struct msm_i2c_platform_data mmi_msm8960_i2c_qup_gsbi12_pdata = {
+	.clk_freq = 100000,
+	.src_clk_rate = 24000000,
+};
+
+
+/* This sysfs allows sensor TCMD to switch the control of I2C-12
+ *  from DSPS to Krait at runtime by issuing the following command:
+ *	echo 1 > /sys/kernel/factory_gsbi12_mode/install
+ * Upon phone reboot, everything will be back to normal.
+ */
+static ssize_t factory_gsbi12_mode_install_set(struct kobject *kobj,
+					struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	int Error;
+
+	mmi_msm8960_device_qup_i2c_gsbi12.dev.platform_data =
+				&mmi_msm8960_i2c_qup_gsbi12_pdata;
+	Error = platform_device_register(&mmi_msm8960_device_qup_i2c_gsbi12);
+
+	if (Error)
+		printk(KERN_ERR "%s: failed to register gsbi12\n", __func__);
+
+	/* We must return # of bytes used from buffer
+	(do not return 0,it will throw an error) */
+	return count;
+}
+
+static struct kobj_attribute factory_gsbi12_mode_install_attribute =
+	__ATTR(install, S_IRUGO|S_IWUSR, NULL, factory_gsbi12_mode_install_set);
+static struct kobject *factory_gsbi12_mode_kobj;
+
+static int sysfs_factory_gsbi12_mode_init(void)
+{
+	int retval;
+
+	/* creates a new folder(node) factory_gsbi12_mode under /sys/kernel */
+	factory_gsbi12_mode_kobj = kobject_create_and_add("factory_gsbi12_mode",
+			kernel_kobj);
+	if (!factory_gsbi12_mode_kobj)
+		return -ENOMEM;
+
+	/* creates a file named install under /sys/kernel/factory_gsbi12_mode */
+	retval = sysfs_create_file(factory_gsbi12_mode_kobj,
+				&factory_gsbi12_mode_install_attribute.attr);
+	if (retval)
+		kobject_put(factory_gsbi12_mode_kobj);
+
+	return retval;
+}
+
 static void __init mmi_gsbi_init(struct msm8960_oem_init_ptrs *oem_ptr)
 {
 	mmi_init_gsbi_devices_from_dt();
@@ -199,6 +329,9 @@ static struct platform_device *mmi_devices[] __initdata = {
 	&mmi_pm8xxx_rgb_leds_device,
 	&mmi_alsa_to_h2w_hs_device,
 	&mmi_bq5101xb_device,
+#ifdef CONFIG_EMU_DETECTION
+	&msm8960_device_uart_gsbi,
+#endif
 };
 
 #define SERIALNO_MAX_LEN 64
@@ -333,6 +466,177 @@ static void __init mmi_unit_info_init(void){
 		mui->baseband, mui->carrier);
 }
 
+static int mot_tcmd_export_gpio(void)
+{
+	int rc;
+
+	rc = gpio_request(1, "USB_HOST_EN");
+	if (!rc) {
+		gpio_direction_output(1, 0);
+		rc = gpio_export(1, 0);
+		if (rc) {
+			pr_err("%s: GPIO USB_HOST_EN export failure\n",
+					__func__);
+			gpio_free(1);
+		}
+	}
+
+	rc = gpio_request(PM8921_GPIO_PM_TO_SYS(36), "SIM_DET");
+	if (!rc) {
+		gpio_direction_input(PM8921_GPIO_PM_TO_SYS(36));
+		rc = gpio_export(PM8921_GPIO_PM_TO_SYS(36), 0);
+		if (rc) {
+			pr_err("%s: GPIO SIM_DET export failure\n", __func__);
+			gpio_free(PM8921_GPIO_PM_TO_SYS(36));
+		}
+	}
+
+	/* RF connection detect GPIOs */
+	rc = gpio_request(24, "RF_CONN_DET_2G3G");
+	if (!rc) {
+		gpio_direction_input(24);
+		rc = gpio_export(24, 0);
+		if (rc) {
+			pr_err("%s: GPIO 24 export failure\n", __func__);
+			gpio_free(24);
+		}
+	}
+
+	rc = gpio_request(25, "RF_CONN_DET_LTE_1");
+	if (!rc) {
+		gpio_direction_input(25);
+		rc = gpio_export(25, 0);
+		if (rc) {
+			pr_err("%s: GPIO 25 export failure\n", __func__);
+			gpio_free(25);
+		}
+	}
+
+	rc = gpio_request(81, "RF_CONN_DET_LTE_2");
+	if (!rc) {
+		gpio_direction_input(81);
+		rc = gpio_export(81, 0);
+		if (rc) {
+			pr_err("%s: GPIO 81 export failure\n", __func__);
+			gpio_free(81);
+		}
+	}
+	return 0;
+}
+
+static ssize_t hw_rev_txt_pmic_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+/* Format: TYPE:VENDOR:HWREV:DATE:FIRMWARE_REV:INFO  */
+	return snprintf(buf, PAGE_SIZE,
+			"PMIC:QUALCOMM-PM8921:%s:::rev1=0x%02X,rev2=0x%02X\n",
+			pmic_hw_rev_txt_version,
+			pmic_hw_rev_txt_rev1,
+			pmic_hw_rev_txt_rev2);
+}
+
+static ssize_t hw_rev_txt_display_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE,
+			"Display:0x%02X:0x%02X::0x%02X:\n",
+			display_hw_rev_txt_manufacturer,
+			display_hw_rev_txt_controller,
+			display_hw_rev_txt_controller_drv);
+}
+
+static struct kobj_attribute hw_rev_txt_pmic_attribute =
+	__ATTR(pmic, 0444, hw_rev_txt_pmic_show, NULL);
+
+static struct kobj_attribute hw_rev_txt_display_attribute =
+	__ATTR(display, 0444, hw_rev_txt_display_show, NULL);
+
+static struct attribute *hw_rev_txt_attrs[] = {
+	&hw_rev_txt_pmic_attribute.attr,
+	&hw_rev_txt_display_attribute.attr,
+	NULL
+};
+
+static struct attribute_group hw_rev_txt_attr_group = {
+	.attrs = hw_rev_txt_attrs,
+};
+
+static int hw_rev_txt_init(void)
+{
+	static struct kobject *hw_rev_txt_kobj;
+	int retval;
+
+	hw_rev_txt_kobj = kobject_create_and_add("hardware_revisions", NULL);
+	if (!hw_rev_txt_kobj) {
+		pr_err("%s: failed to create /sys/hardware_revisions\n",
+				__func__);
+		return -ENOMEM;
+	}
+
+	retval = sysfs_create_group(hw_rev_txt_kobj, &hw_rev_txt_attr_group);
+	if (retval)
+		pr_err("%s: failed for entries in /sys/hardware_revisions\n",
+				__func__);
+
+	return retval;
+}
+
+static ssize_t
+sysfs_extended_baseband_show(struct sys_device *dev,
+		struct sysdev_attribute *attr,
+		char *buf)
+{
+	if (!strnlen(extended_baseband, BASEBAND_MAX_LEN)) {
+		pr_err("%s: No extended_baseband available!\n", __func__);
+		return 0;
+	}
+	return snprintf(buf, BASEBAND_MAX_LEN, "%s\n", extended_baseband);
+}
+
+static struct sysdev_attribute baseband_files[] = {
+	_SYSDEV_ATTR(extended_baseband, 0444,
+			sysfs_extended_baseband_show, NULL),
+};
+
+static struct sysdev_class baseband_sysdev_class = {
+	.name = "baseband",
+};
+
+static struct sys_device baseband_sys_device = {
+	.id = 0,
+	.cls = &baseband_sysdev_class,
+};
+
+static void init_sysfs_extended_baseband(void){
+	int err;
+
+	if (!strnlen(extended_baseband, BASEBAND_MAX_LEN)) {
+		pr_err("%s: No extended_baseband available!\n", __func__);
+		return;
+	}
+
+	err = sysdev_class_register(&baseband_sysdev_class);
+	if (err) {
+		pr_err("%s: sysdev_class_register fail (%d)\n",
+				__func__, err);
+		return;
+	}
+
+	err = sysdev_register(&baseband_sys_device);
+	if (err) {
+		pr_err("%s: sysdev_register fail (%d)\n",
+			__func__, err);
+		return;
+	}
+
+	err = sysdev_create_file(&baseband_sys_device, &baseband_files[0]);
+	if (err) {
+		pr_err("%s: sysdev_create_file(%s)=%d\n",
+				__func__, baseband_files[0].attr.name, err);
+		return;
+	}
+}
+
 static void __init mmi_device_init(struct msm8960_oem_init_ptrs *oem_ptr)
 {
 	platform_add_devices(mmi_devices, ARRAY_SIZE(mmi_devices));
@@ -340,6 +644,13 @@ static void __init mmi_device_init(struct msm8960_oem_init_ptrs *oem_ptr)
 
 	mmi_vibrator_init();
 	mmi_unit_info_init();
+	init_sysfs_extended_baseband();
+
+	/* Factory gsbi12 sysfs entry and tcmd gpio exports */
+	sysfs_factory_gsbi12_mode_init();
+	mot_tcmd_export_gpio();
+	emmc_version_init();
+	hw_rev_txt_init();
 
 	if (mbmprotocol == 0) {
 		/* do not reboot - version was not reported */
@@ -362,23 +673,58 @@ static int mmi_factory_kill_gpio;
 
 static void __init mmi_get_factory_kill_gpio(void)
 {
-	struct device_node *n = NULL;
-	int i, gpio_count;
-	struct gpio gpio;
+	struct device_node *chosen;
+	int len = 0, enable = 1, rc;
+	u32 gpio = 0;
+	const void *prop;
 
-	n = of_find_compatible_node(n, NULL, "mmi,factory-support-msm8960");
-	if (!n)
-		return;
-	gpio_count = of_gpio_count(n);
-	for (i = 0; i < gpio_count; i++) {
-		gpio.gpio = of_get_gpio(n, i);
-		of_property_read_string_index(n, "gpio-names", i, &gpio.label);
-		if (!strcmp(gpio.label, "factory_kill_disable")) {
-			mmi_factory_kill_gpio = gpio.gpio;
-			break;
-		}
+	chosen = of_find_node_by_path("/Chosen@0");
+	if (!chosen)
+		goto out;
+
+	prop = of_get_property(chosen, "factory_kill_disable", &len);
+	if (prop && (len == sizeof(u8)) && *(u8 *)prop)
+		enable = 0;
+
+	rc = of_property_read_u32(chosen, "factory_kill_gpio", &gpio);
+	if (rc) {
+		pr_err("%s: factory_kill_gpio not present\n", __func__);
+		goto putnode;
 	}
-	of_node_put(n);
+
+	/*Write gpio number in mmi_factory_kill_gpio*/
+	mmi_factory_kill_gpio = gpio;
+
+	rc = gpio_request(gpio, "Factory Kill Disable");
+	if (rc) {
+		pr_err("%s: GPIO request failure\n", __func__);
+		goto putnode;
+	}
+
+	rc = gpio_direction_output(gpio, enable);
+	if (rc) {
+		pr_err("%s: GPIO configuration failure\n", __func__);
+		goto gpiofree;
+	}
+
+	rc = gpio_export(gpio, 0);
+
+	if (rc) {
+		pr_err("%s: GPIO export failure\n", __func__);
+		goto gpiofree;
+	}
+
+	pr_info("%s: Factory Kill Circuit: %s\n", __func__,
+		(enable ? "enabled" : "disabled"));
+
+	return;
+
+gpiofree:
+	gpio_free(gpio);
+putnode:
+	of_node_put(chosen);
+out:
+	return;
 }
 
 bool check_factory_kill_gpio(void)
@@ -466,6 +812,10 @@ static void __init mmi_otg_init(struct msm8960_oem_init_ptrs *oem_ptr,
 				__func__, val ? "high" : "low");
 		otg_pdata->pmic_id_flt_gpio_active_high = val;
 	}
+
+#ifdef CONFIG_EMU_DETECTION
+	mmi_init_emu_detection(otg_pdata);
+#endif
 
 put_node:
 	of_node_put(chosen);
@@ -678,6 +1028,7 @@ static void __init mmi_msm8960_init_early(void)
 	msm8960_oem_funcs.msm_regulator_init = mmi_regulator_init;
 	msm8960_oem_funcs.msm_otg_init = mmi_otg_init;
 	msm8960_oem_funcs.msm_mmc_init = mmi_mmc_init;
+	msm8960_oem_funcs.msm_hdmi_init = is_mmi_hdmi_dt_available;
 
 	/* Custom OEM Platform Data */
 	mmi_data.is_factory = mmi_boot_mode_is_factory;
@@ -708,6 +1059,16 @@ __tagtable(ATAG_FLAT_DEV_TREE_ADDRESS, parse_tag_flat_dev_tree_address);
 
 static const char *mmi_dt_match[] __initdata = {
 	"mmi,msm8960",
+	NULL
+};
+
+static const char *mmi_dt_match_8960[] __initdata = {
+	"mmi,msm8960-old",
+	NULL
+};
+
+static const char *mmi_dt_match_dinara[] __initdata = {
+	"mmi,msm8960-qinara",
 	NULL
 };
 
@@ -771,20 +1132,37 @@ static void __init mmi_msm8960_dt_init(void)
 	struct of_dev_auxdata *adata = mmi_auxdata;
 
 	mmi_of_populate_setup();
-	of_platform_populate(NULL, of_default_bus_match_table, adata, NULL);
+	/* Register extra devices which are not part of GSBISetup@0 */
+	if (cpu_is_msm8960ab())
+		of_platform_populate(NULL,
+			of_default_bus_match_table, adata, NULL);
 	msm8960_cdp_init();
 }
+
+MACHINE_START(DINARA, "Qinara")
+	.map_io = msm8960_map_io,
+	.reserve = mmi_msm8960_reserve,
+	.init_irq = mmi_msm8960_init_irq,
+	.handle_irq = gic_handle_irq,
+	.timer = &msm_timer,
+	.init_machine = mmi_msm8960_dt_init,
+	.init_early = mmi_msm8960_init_early,
+	.init_very_early = msm8960_early_memory,
+	.restart = msm_restart,
+	.dt_compat = mmi_dt_match_dinara,
+MACHINE_END
 
 MACHINE_START(VANQUISH, "Vanquish")
 	.map_io = msm8960_map_io,
 	.reserve = mmi_msm8960_reserve,
-	.init_irq = msm8960_init_irq,
+	.init_irq = mmi_msm8960_init_irq,
 	.handle_irq = gic_handle_irq,
 	.timer = &msm_timer,
-	.init_machine = msm8960_cdp_init,
+	.init_machine = mmi_msm8960_dt_init,
 	.init_early = mmi_msm8960_init_early,
 	.init_very_early = msm8960_early_memory,
 	.restart = msm_restart,
+	.dt_compat = mmi_dt_match_8960,
 MACHINE_END
 
 MACHINE_START(MSM8960DT, "msm8960dt")
