@@ -800,6 +800,7 @@ static int tabla_put_iir_band_audio_mixer(
 	return 0;
 }
 
+#ifdef CONFIG_EMU_DETECTION
 static int snd_soc_get_emu_antipop(struct snd_kcontrol *kcontrol,
 		struct snd_ctl_elem_value *ucontrol)
 {
@@ -831,6 +832,7 @@ static int snd_soc_put_emu_antipop(struct snd_kcontrol *kcontrol,
 
 	return 0;
 }
+#endif
 
 static int tabla_compander_gain_offset(
 	struct snd_soc_codec *codec, u32 enable,
@@ -1378,8 +1380,10 @@ static const struct snd_kcontrol_new tabla_snd_controls[] = {
 				   tabla_get_compander, tabla_set_compander),
 	SOC_SINGLE_EXT("COMP2 Switch", SND_SOC_NOPM, COMPANDER_2, 1, 0,
 				   tabla_get_compander, tabla_set_compander),
+#ifdef CONFIG_EMU_DETECTION
 	SOC_SINGLE_BOOL_EXT("EMU Antipop", 0, snd_soc_get_emu_antipop,
 					snd_soc_put_emu_antipop),
+#endif
 };
 
 static const struct snd_kcontrol_new tabla_1_x_snd_controls[] = {

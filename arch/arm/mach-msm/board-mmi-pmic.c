@@ -359,8 +359,13 @@ void w1_gpio_enable_regulators(int enable)
 
 	if (enable) {
 		if (!IS_ERR_OR_NULL(vdd1)) {
+#ifdef CONFIG_EMU_DETECTION
 			rc = regulator_set_voltage(vdd1,
 						get_l17_voltage(), 2850000);
+#else
+			rc = regulator_set_voltage(vdd1,
+						2850000, 2850000);
+#endif
 			if (!rc) {
 				rc = regulator_enable(vdd1);
 			}
