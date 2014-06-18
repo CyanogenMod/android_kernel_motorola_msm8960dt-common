@@ -74,6 +74,30 @@ int atags_to_fdt(void *atag_list, void *fdt, int total_space)
 		if (atag->hdr.tag == ATAG_CMDLINE) {
 			setprop_string(fdt, "/chosen", "bootargs",
 					atag->u.cmdline.cmdline);
+#ifdef CONFIG_MMI_JB_FIRMWARE
+		} else if (atag->hdr.tag == ATAG_REVISION) {
+			setprop_cell(fdt, "/chosen", "linux,hwrev",
+					atag->u.revision.rev);
+		} else if (atag->hdr.tag == ATAG_SERIAL) {
+			setprop_cell(fdt, "/chosen", "linux,seriallow",
+					atag->u.serialnr.low);
+			setprop_cell(fdt, "/chosen", "linux,serialhigh",
+					atag->u.serialnr.high);
+		} else if (atag->hdr.tag == ATAG_DISPLAY) {
+			setprop_string(fdt, "/chosen", "mmi,panel_name",
+					atag->u.display.display);
+#ifdef CONFIG_BOOTINFO
+		} else if (atag->hdr.tag == ATAG_MBM_VERSION) {
+			setprop_cell(fdt, "/chosen", "mmi,mbmversion",
+					atag->u.mbm_version.mbm_version);
+		} else if (atag->hdr.tag == ATAG_POWERUP_REASON) {
+			setprop_cell(fdt, "/chosen", "mmi,powerup_reason",
+					atag->u.powerup_reason.powerup_reason);
+#endif //CONFIG_BOOTINFO
+		} else if (atag->hdr.tag == ATAG_BASEBAND) {
+			setprop_string(fdt, "/chosen", "mmi,baseband",
+					atag->u.baseband.baseband);
+#endif //CONFIG_MMI_JB_FIRMWARE
 		} else if (atag->hdr.tag == ATAG_MEM) {
 			if (memcount >= sizeof(mem_reg_property)/4)
 				continue;
@@ -91,6 +115,9 @@ int atags_to_fdt(void *atag_list, void *fdt, int total_space)
 					initrd_start + initrd_size);
 		}
 	}
+#ifdef CONFIG_MMI_JB_FIRMWARE
+	setprop_cell(fdt, "/chosen", "mmi,mbmprotocol", 0x02);
+#endif
 
 	if (memcount)
 		setprop(fdt, "/memory", "reg", mem_reg_property, 4*memcount);
