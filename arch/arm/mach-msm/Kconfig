@@ -2624,6 +2624,13 @@ config MMI_ACPU_INFO
 	help
 	Provide mechanism to access ACPU binning info via procfs.
 
+config MMI_JB_FIRMWARE
+	default n
+	bool "Motorola 3.4 kernel workarounds for JB bootloader"
+	help
+	Enable workarounds to allow the usage of Motorola 3.4 kernel on devices
+	not updated to KitKat firmware"
+
 config HAS_MACH_MEMUTILS
 	default n
 	bool "Motorola MSM memcpy enhancements"
