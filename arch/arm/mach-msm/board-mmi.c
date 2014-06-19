@@ -430,7 +430,13 @@ static void __init mmi_unit_info_init(void){
 	struct mmi_unit_info *mui;
 
 	#define SMEM_KERNEL_RESERVE_SIZE 1024
+#ifdef CONFIG_MMI_JB_FIRMWARE
+	#undef MMI_UNIT_INFO_VER
+	#define MMI_UNIT_INFO_VER 1
+	mui = (struct mmi_unit_info *) smem_alloc2(SMEM_KERNEL_RESERVE,
+#else
 	mui = (struct mmi_unit_info *) smem_alloc(SMEM_KERNEL_RESERVE,
+#endif
 		SMEM_KERNEL_RESERVE_SIZE);
 
 	if (!mui) {
