@@ -2373,7 +2373,8 @@ void *smem_alloc2(unsigned id, unsigned size_in)
 {
 	struct smem_shared *shared = (void *) MSM_SHARED_RAM_BASE;
 	struct smem_heap_entry *toc = shared->heap_toc;
-	unsigned long flags;
+	int use_spinlocks = spinlocks_initialized;
+	unsigned long flags = 0;
 	void *ret = NULL;
 
 	if (!shared->heap_info.initialized) {
@@ -2385,7 +2386,8 @@ void *smem_alloc2(unsigned id, unsigned size_in)
 		return NULL;
 
 	size_in = ALIGN(size_in, 8);
-	remote_spin_lock_irqsave(&remote_spinlock, flags);
+	if (use_spinlocks)
+		remote_spin_lock_irqsave(&remote_spinlock, flags);
 	if (toc[id].allocated) {
 		SMD_DBG("%s: %u already allocated\n", __func__, id);
 		if (size_in != toc[id].size)
@@ -2410,7 +2412,8 @@ void *smem_alloc2(unsigned id, unsigned size_in)
 			       size_in);
 	}
 	wmb();
-	remote_spin_unlock_irqrestore(&remote_spinlock, flags);
+	if (use_spinlocks)
+		remote_spin_unlock_irqrestore(&remote_spinlock, flags);
 	return ret;
 }
 EXPORT_SYMBOL(smem_alloc2);
