@@ -43,6 +43,10 @@ static int cfilt_adjust_ms = 10;
 module_param(cfilt_adjust_ms, int, 0644);
 MODULE_PARM_DESC(cfilt_adjust_ms, "delay after adjusting cfilt voltage in ms");
 
+static int enable_lineout_us = 16;
+module_param(enable_lineout_us, int, 0644);
+MODULE_PARM_DESC(enable_lineout_us, "delay after enabling lineout in us");
+
 #define WCD9310_RATES (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |\
 			SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000 |\
 			SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
@@ -2349,7 +2353,7 @@ static int tabla_codec_enable_lineout(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_POST_PMU:
 		pr_debug("%s: sleeping 16 us after %s PA turn on\n",
 				__func__, w->name);
-		usleep_range(16, 16);
+		usleep_range(enable_lineout_us, enable_lineout_us);
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		snd_soc_update_bits(codec, lineout_gain_reg, 0x40, 0x00);
