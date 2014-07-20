@@ -554,6 +554,7 @@ static void notify_other_smsm(uint32_t smsm_entry, uint32_t notify_mask)
 	}
 }
 
+#ifndef CONFIG_MMI_JB_FIRMWARE
 static int smsm_pm_notifier(struct notifier_block *nb,
 				unsigned long event, void *unused)
 {
@@ -573,6 +574,7 @@ static struct notifier_block smsm_pm_nb = {
 	.notifier_call = smsm_pm_notifier,
 	.priority = 0,
 };
+#endif
 
 void smd_diag(void)
 {
@@ -2570,10 +2572,12 @@ static int smsm_init(void)
 
 	wmb();
 
+#ifndef CONFIG_MMI_JB_FIRMWARE
 	smsm_pm_notifier(&smsm_pm_nb, PM_POST_SUSPEND, NULL);
 	i = register_pm_notifier(&smsm_pm_nb);
 	if (i)
 		pr_err("%s: power state notif error %d\n", __func__, i);
+#endif
 
 	return 0;
 }
