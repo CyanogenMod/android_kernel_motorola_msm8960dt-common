@@ -344,7 +344,6 @@ typedef enum eSirResultCodes
 #ifdef WLAN_FEATURE_GTK_OFFLOAD
     eSIR_SME_GTK_OFFLOAD_GETINFO_REQ_FAILED,
 #endif // WLAN_FEATURE_GTK_OFFLOAD
-    eSIR_SME_DEAUTH_STATUS,
     eSIR_DONOT_USE_RESULT_CODE = SIR_MAX_ENUM_SIZE    
 } tSirResultCodes;
 
@@ -455,15 +454,6 @@ typedef struct sSirRemainOnChnReq
     tANI_U32 duration;
     tANI_U8  probeRspIe[1];
 }tSirRemainOnChnReq, *tpSirRemainOnChnReq;
-
-/* Structure for vendor specific IE of debug marker frame
-   to debug remain on channel issues */
-typedef struct publicVendorSpecific
-{
-    tANI_U8 category;
-    tANI_U8 elementid;
-    tANI_U8 length;
-} publicVendorSpecific;
 
 typedef struct sSirRegisterMgmtFrame
 {
@@ -1051,8 +1041,6 @@ typedef struct sSirSmeJoinReq
     tANI_U8             txBFIniFeatureEnabled;
     tANI_U8             txBFCsnValue;
 #endif
-    tAniBool            isWMEenabled;
-    tAniBool            isQosEnabled;
     tANI_U8             isAmsduSupportInAMPDU;
 
     tAniTitanCBNeighborInfo cbNeighbors;
@@ -2127,7 +2115,6 @@ typedef struct sAniChangeCountryCodeReq
     tANI_U16                msgType;    // message type is same as the request type
     tANI_U16                msgLen;     // length of the entire request
     tANI_U8                 countryCode[WNI_CFG_COUNTRY_CODE_LEN];   //3 char country code
-    tAniBool                sendRegHint;  //TRUE if we want to send hint to NL80211
     void                    *changeCCCallback;
     void                    *pDevContext; //device context
     void                    *pVosContext; //voss context
@@ -3263,9 +3250,7 @@ typedef struct sSirUpdateAPWPARSNIEsReq
 #define SIR_OFFLOAD_DISABLE                         0
 #define SIR_OFFLOAD_ENABLE                          1
 #define SIR_OFFLOAD_BCAST_FILTER_ENABLE             0x2
-#define SIR_OFFLOAD_MCAST_FILTER_ENABLE             0x4
 #define SIR_OFFLOAD_ARP_AND_BCAST_FILTER_ENABLE     (SIR_OFFLOAD_ENABLE|SIR_OFFLOAD_BCAST_FILTER_ENABLE)
-#define SIR_OFFLOAD_NS_AND_MCAST_FILTER_ENABLE      (SIR_OFFLOAD_ENABLE|SIR_OFFLOAD_MCAST_FILTER_ENABLE)
 
 #ifdef WLAN_NS_OFFLOAD
 typedef struct sSirNsOffloadReq
@@ -3277,7 +3262,6 @@ typedef struct sSirNsOffloadReq
     tANI_U8 selfMacAddr[6];
     tANI_U8 srcIPv6AddrValid;
     tANI_U8 targetIPv6AddrValid[SIR_MAC_NUM_TARGET_IPV6_NS_OFFLOAD_NA];
-    tANI_U8 slotIdx;
 } tSirNsOffloadReq, *tpSirNsOffloadReq;
 #endif //WLAN_NS_OFFLOAD
 
@@ -3473,15 +3457,9 @@ typedef struct
   tSirScanTimer  aTimerValues[SIR_PNO_MAX_SCAN_TIMERS]; 
 } tSirScanTimersType;
 
-/*Pref Net Req status */
-typedef void(*PNOReqStatusCb)(void *callbackContext, VOS_STATUS status);
-
-
 typedef struct sSirPNOScanReq
 {
   tANI_U8             enable;
-  PNOReqStatusCb      statusCallback;
-  void                *callbackContext;
   eSirPNOMode         modePNO;
   tANI_U8             ucNetworksCount; 
   tSirNetworkType     aNetworks[SIR_PNO_MAX_SUPP_NETWORKS];
@@ -3700,6 +3678,14 @@ typedef struct sSirRcvPktFilterCfg
   tSirRcvPktFilterFieldParams     paramsData[SIR_MAX_NUM_TESTS_PER_FILTER];
 }tSirRcvPktFilterCfgType, *tpSirRcvPktFilterCfgType;
 
+// IKJB42MAIN-1244, Motorola, a19091 - BEGIN
+typedef struct sSirInvokeV6Filter
+{
+    int (*configureFilterFn)(void *pAdapter, v_U8_t set, v_U8_t userSet);
+    void *pHddAdapter;
+    v_U8_t set;
+}tSirInvokeV6Filter;
+// IKJB42MAIN-1244, Motorola, a19091 - END
 //
 // Filter Packet Match Count Parameters
 //

@@ -154,7 +154,6 @@ typedef enum
  */
 #define IS_MCC_SUPPORTED (WDA_IsWcnssWlanReportedVersionGreaterThanOrEqual( 0, 1, 1, 0))
 #define IS_FEATURE_SUPPORTED_BY_FW(featEnumValue) (!!WDA_getFwWlanFeatCaps(featEnumValue))
-#define IS_FEATURE_SUPPORTED_BY_DRIVER(featEnumValue) (!!WDA_getHostWlanFeatCaps(featEnumValue))
 
 #ifdef WLAN_ACTIVEMODE_OFFLOAD_FEATURE
 #define IS_ACTIVEMODE_OFFLOAD_FEATURE_ENABLE ((WDA_getFwWlanFeatCaps(WLANACTIVE_OFFLOAD)) & (WDI_getHostWlanFeatCaps(WLANACTIVE_OFFLOAD)))
@@ -282,7 +281,6 @@ typedef enum
 #define WDA_DS_TX_START_XMIT  WLANTL_TX_START_XMIT
 #define WDA_DS_FINISH_ULA     WLANTL_FINISH_ULA
 
-#define VOS_TO_WPAL_PKT(_vos_pkt) ((wpt_packet*)_vos_pkt)
 
 #define WDA_TX_PACKET_FREED      0X0
 
@@ -1044,6 +1042,7 @@ tSirRetStatus uMacPostCtrlMsg(void* pSirGlobal, tSirMbMsg* pMb);
 #define WDA_PACKET_COALESCING_FILTER_MATCH_COUNT_REQ    SIR_HAL_PACKET_COALESCING_FILTER_MATCH_COUNT_REQ
 #define WDA_PACKET_COALESCING_FILTER_MATCH_COUNT_RSP    SIR_HAL_PACKET_COALESCING_FILTER_MATCH_COUNT_RSP
 #define WDA_RECEIVE_FILTER_CLEAR_FILTER_REQ             SIR_HAL_RECEIVE_FILTER_CLEAR_FILTER_REQ   
+#define WDA_RECEIVE_FILTER_SET_FILTER_MC_REQ            SIR_HAL_RECEIVE_FILTER_SET_FILTER_MC_REQ // IKJB42MAIN-1244, Motorola, a19091
 #endif // WLAN_FEATURE_PACKET_FILTERING
 
 #define WDA_SET_POWER_PARAMS_REQ   SIR_HAL_SET_POWER_PARAMS_REQ
@@ -1065,8 +1064,7 @@ tSirRetStatus uMacPostCtrlMsg(void* pSirGlobal, tSirMbMsg* pMb);
 
 tSirRetStatus wdaPostCtrlMsg(tpAniSirGlobal pMac, tSirMsgQ *pMsg);
 
-eHalStatus WDA_SetRegDomain(void * clientCtxt, v_REGDOMAIN_t regId,
-                                               tAniBool sendRegHint);
+eHalStatus WDA_SetRegDomain(void * clientCtxt, v_REGDOMAIN_t regId);
 
 #define HAL_USE_BD_RATE2_FOR_MANAGEMENT_FRAME 0x40 // Bit 6 will be used to control BD rate for Management frames
 
@@ -1102,8 +1100,6 @@ eHalStatus WDA_SetRegDomain(void * clientCtxt, v_REGDOMAIN_t regId,
 
 v_BOOL_t WDA_IsHwFrameTxTranslationCapable(v_PVOID_t pVosGCtx, 
                                                       tANI_U8 staIdx);
-
-v_BOOL_t WDA_IsSelfSTA(v_PVOID_t pVosGCtx,tANI_U8 staIdx);
 
 #  define WDA_EnableUapsdAcParams(vosGCtx, staId, uapsdInfo) \
          WDA_SetUapsdAcParamsReq(vosGCtx, staId, uapsdInfo)
@@ -1811,10 +1807,9 @@ tANI_U8 WDA_getFwWlanFeatCaps(tANI_U8 featEnumValue);
   PARAMETERS
     pMac : upper MAC context pointer
     displaySnapshot : Display DXE snapshot option
-    debugFlags      : Enable stall detect features
-                      defined by WPAL_DeviceDebugFlags
-                      These features may effect
-                      data performance.
+    enableStallDetect : Enable stall detect feature
+                        This feature will take effect to data performance
+                        Not integrate till fully verification
 
   RETURN VALUE
     NONE
@@ -1824,7 +1819,7 @@ void WDA_TransportChannelDebug
 (
   tpAniSirGlobal pMac,
   v_BOOL_t       displaySnapshot,
-  v_U8_t         debugFlags
+  v_BOOL_t       toggleStallDetect
 );
 
 /*==========================================================================

@@ -455,9 +455,6 @@
 #define SIR_MAX_NOA_DESCR           2
 #define SIR_P2P_IE_HEADER_LEN       6
 
-#define SIR_MAC_CISCO_OUI "\x00\x40\x96"
-#define SIR_MAC_CISCO_OUI_SIZE 3
-
 // min size of wme oui header: oui(3) + type + subtype + version
 #define SIR_MAC_OUI_WME_HDR_MIN       6
 
@@ -501,10 +498,8 @@
 #define SIR_MAC_OUI_WSM_SCHEDULE_MAX        20
 
 #ifdef WLAN_NS_OFFLOAD
-#define SIR_MAC_NS_OFFLOAD_SIZE             1  //support only one IPv6 offload
+#define SIR_MAC_NS_OFFLOAD_SIZE        1  //support only one IPv6 offload
 #define SIR_MAC_NUM_TARGET_IPV6_NS_OFFLOAD_NA   2 //Number of target IP in NA frames. It must be at least 2
-#define SIR_MAC_IPV6_ADDR_LEN               16
-#define SIR_IPV6_ADDR_VALID                 1
 #endif //WLAN_NS_OFFLOAD
 #define SIR_MAC_ARP_OFFLOAD_SIZE        1
 

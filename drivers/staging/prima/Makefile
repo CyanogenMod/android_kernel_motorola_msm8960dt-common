@@ -235,8 +235,7 @@ SME_PMC_OBJS := $(SME_SRC_DIR)/pmc/pmcApi.o \
 SME_QOS_OBJS := $(SME_SRC_DIR)/QoS/sme_Qos.o
 
 SME_CMN_OBJS := $(SME_SRC_DIR)/sme_common/sme_Api.o \
-		$(SME_SRC_DIR)/sme_common/sme_FTApi.o \
-		$(SME_SRC_DIR)/sme_common/sme_Trace.o
+		$(SME_SRC_DIR)/sme_common/sme_FTApi.o
 
 SME_BTC_OBJS := $(SME_SRC_DIR)/btc/btcApi.o
 
@@ -478,12 +477,10 @@ CDEFINES :=	-DANI_BUS_TYPE_PLATFORM=1 \
 		-DWLAN_FEATURE_P2P_DEBUG \
 		-DWLAN_ENABLE_AGEIE_ON_SCAN_RESULTS \
 		-DWLANTL_DEBUG\
-		-DWLAN_NS_OFFLOAD \
 		-DWLAN_ACTIVEMODE_OFFLOAD_FEATURE \
         	-DWLAN_FEATURE_HOLD_RX_WAKELOCK \
 		-DWLAN_SOFTAP_VSTA_FEATURE \
-                -DWLAN_FEATURE_ROAM_SCAN_OFFLOAD \
-                -DWLAN_BUG_ON_SKB_ERROR
+                -DWLAN_FEATURE_ROAM_SCAN_OFFLOAD
 
 ifneq ($(CONFIG_PRONTO_WLAN),)
 CDEFINES += -DWCN_PRONTO
@@ -494,7 +491,6 @@ ifeq ($(BUILD_DEBUG_VERSION),1)
 CDEFINES +=	-DWLAN_DEBUG \
 		-DTRACE_RECORD \
 		-DLIM_TRACE_RECORD \
-		-DSME_TRACE_RECORD \
 		-DPE_DEBUG_LOGW \
 		-DPE_DEBUG_LOGE \
 		-DDEBUG
@@ -538,6 +534,9 @@ endif
 
 ifeq ($(CONFIG_PRIMA_WLAN_LFR),y)
 CDEFINES += -DFEATURE_WLAN_LFR
+#Begin fjdw67 Motorola, IKJB42MAIN-6385 - LFR roaming instrumentation
+CDEFINES += -DFEATURE_WLAN_LFR_METRICS
+#End IKJB42MAIN-6385
 endif
 
 ifeq ($(CONFIG_PRIMA_WLAN_OKC),y)
@@ -557,8 +556,27 @@ endif
 # enable the MAC Address auto-generation feature
 CDEFINES += -DWLAN_AUTOGEN_MACADDR_FEATURE
 
-ifeq ($(CONFIG_WLAN_FEATURE_11W),y)
-CDEFINES += -DWLAN_FEATURE_11W
+#Allow for OTA upgrade of BIN files
+CDEFINES += -DWLAN_NV_OTA_UPGRADE
+
+ifneq (, $(filter msm8960, $(BOARD_PLATFORM)))
+EXTRA_CFLAGS += -march=armv7-a
+CDEFINES += -DMSM_PLATFORM_8960
+endif
+
+ifneq (, $(filter msm8660, $(BOARD_PLATFORM)))
+EXTRA_CFLAGS += -march=armv7-a
+CDEFINES += -DMSM_PLATFORM_8660
+endif
+
+ifneq (, $(filter msm7630_surf msm7630_fusion, $(BOARD_PLATFORM)))
+EXTRA_CFLAGS += -march=armv7-a
+CDEFINES += -DMSM_PLATFORM_7x30
+endif
+
+ifneq (, $(filter msm7627_surf, $(BOARD_PLATFORM)))
+EXTRA_CFLAGS += -march=armv6
+CDEFINES += -DMSM_PLATFORM_7x27
 endif
 
 ifeq ($(PANIC_ON_BUG),1)

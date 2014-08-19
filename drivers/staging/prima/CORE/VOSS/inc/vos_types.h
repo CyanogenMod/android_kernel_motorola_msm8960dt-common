@@ -52,12 +52,22 @@
   \file  vos_Types.h
 
   \brief virtual Operating System Servies (vOS)
+<<<<<<< HEAD:CORE/VOSS/inc/vos_types.h
+               
+   Basic type definitions 
+  
+   Copyright 2008 (c) Qualcomm, Incorporated.  All Rights Reserved.
+   
+   Qualcomm Confidential and Proprietary.
+  
+=======
 
    Basic type definitions
 
    Copyright 2008 (c) Qualcomm, Incorporated.
    All Rights Reserved.
    Qualcomm Confidential and Proprietary.
+>>>>>>> b682f18... wlan: qnx awareness to corestack:prima/CORE/VOSS/inc/vos_types.h
   ========================================================================*/
 
 /* $Header$ */
@@ -138,7 +148,6 @@ typedef enum
    VOS_MODULE_ID_VOSS       = 10,
    VOS_MODULE_ID_SAP        = 11,
    VOS_MODULE_ID_HDD_SOFTAP = 12,
-   VOS_MODULE_ID_PMC        = 13,
 
    // not a real module ID.  This is used to identify the maxiumum
    // number of VOS_MODULE_IDs and should always be at the END of

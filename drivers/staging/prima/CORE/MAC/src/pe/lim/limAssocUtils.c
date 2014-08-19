@@ -622,7 +622,7 @@ limCleanupRxPath(tpAniSirGlobal pMac, tpDphHashNode pStaDs,tpPESession psessionE
     PELOG2(limLog( pMac, LOG2, FL("**Initiate cleanup"));)
 
     limAbortBackgroundScan( pMac );
-    psessionEntry->isCiscoVendorAP = FALSE;
+
     if (pMac->lim.gLimAddtsSent)
     {
         MTRACE(macTrace(pMac, TRACE_CODE_TIMER_DEACTIVATE, psessionEntry->peSessionId, eLIM_ADDTS_RSP_TIMER));
@@ -1806,9 +1806,7 @@ limPopulatePeerRateSet(tpAniSirGlobal pMac,
         limLog(pMac, LOGE, FL("more than SIR_MAC_RATESET_EID_MAX rates\n"));
         goto error;
     }
-    if ( (psessionEntry->dot11mode == WNI_CFG_DOT11_MODE_11G) ||
-         (psessionEntry->dot11mode == WNI_CFG_DOT11_MODE_11A) ||
-         (psessionEntry->dot11mode == WNI_CFG_DOT11_MODE_11N) )
+    if (psessionEntry->dot11mode == WNI_CFG_PHY_MODE_11G)
     {
 
         if (psessionEntry->extRateSet.numRates < SIR_MAC_RATESET_EID_MAX)
@@ -2946,7 +2944,6 @@ limDeleteDphHashEntry(tpAniSirGlobal pMac, tSirMacAddr staAddr, tANI_U16 staId,t
     tUpdateBeaconParams beaconParams;    
     tLimSystemRole systemRole;
 
-    vos_mem_zero(&beaconParams, sizeof(tUpdateBeaconParams));
     beaconParams.paramChangeBitmap = 0;
     limDeactivateAndChangePerStaIdTimer(pMac, eLIM_CNF_WAIT_TIMER, staId);
     if (NULL == psessionEntry)
@@ -3889,20 +3886,22 @@ limPrepareAndSendDelStaCnf(tpAniSirGlobal pMac, tpDphHashNode pStaDs, tSirResult
             sizeof(tSirMacAddr));
 
     mlmStaContext = pStaDs->mlmStaContext;
-    if ((psessionEntry->limSystemRole == eLIM_AP_ROLE) ||
-        (psessionEntry->limSystemRole == eLIM_BT_AMP_AP_ROLE))
+    if(eSIR_SME_SUCCESS == statusCode)
     {
-        limReleasePeerIdx(pMac, pStaDs->assocId, psessionEntry);
-    }
-    limDeleteDphHashEntry(pMac, pStaDs->staAddr, pStaDs->assocId, psessionEntry);
+        if ((psessionEntry->limSystemRole == eLIM_AP_ROLE) ||
+            (psessionEntry->limSystemRole == eLIM_BT_AMP_AP_ROLE))
+        {
+            limReleasePeerIdx(pMac, pStaDs->assocId, psessionEntry);
+        }
 
-    if ( (psessionEntry->limSystemRole == eLIM_STA_ROLE)||
-         (psessionEntry->limSystemRole == eLIM_BT_AMP_STA_ROLE))
+        limDeleteDphHashEntry(pMac, pStaDs->staAddr, pStaDs->assocId,psessionEntry);
+    }
+    if ( (psessionEntry->limSystemRole == eLIM_STA_ROLE)||(psessionEntry->limSystemRole == eLIM_BT_AMP_STA_ROLE))
     {
         psessionEntry->limMlmState = eLIM_MLM_IDLE_STATE;
-        MTRACE(macTrace(pMac, TRACE_CODE_MLM_STATE,
-                        psessionEntry->peSessionId, psessionEntry->limMlmState));
+        MTRACE(macTrace(pMac, TRACE_CODE_MLM_STATE, psessionEntry->peSessionId, psessionEntry->limMlmState));
     }
+
     limSendDelStaCnf(pMac, staDsAddr, staDsAssocId, mlmStaContext, statusCode,psessionEntry);
 }
 

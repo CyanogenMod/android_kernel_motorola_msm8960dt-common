@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -400,8 +400,6 @@ typedef struct tagScanCmd
         tCsrScanRequest   scanRequest;
         tCsrBGScanRequest bgScanRequest;
     }u;
-    //This flag will be set while aborting the scan due to band change
-    tANI_BOOLEAN            abortScanDueToBandChange;
 }tScanCmd;
 
 typedef struct tagRoamCmd
@@ -646,12 +644,9 @@ typedef struct tagCsrConfig
     tANI_U32  nVhtChannelWidth;
     tANI_U8   txBFEnable;
     tANI_U8   txBFCsnValue;
-    tANI_BOOLEAN enableVhtFor24GHz;
 #endif
     tANI_U8   txLdpcEnable;
-
     tANI_U8 isAmsduSupportInAMPDU;
-    tANI_U8 allowDFSChannelRoam;
 }tCsrConfig;
 
 typedef struct tagCsrChannelPowerInfo
@@ -721,7 +716,6 @@ typedef struct tagCsrScanStruct
     v_REGDOMAIN_t domainIdDefault;  //default regulatory domain
     v_REGDOMAIN_t domainIdCurrent;  //current regulatory domain
     tCsrBssid currentCountryBssid;  // Bssid for current country code
-    tANI_S8 currentCountryRSSI;     // RSSI for current country code
     tANI_BOOLEAN f11dInfoApplied;
     tANI_BOOLEAN fCancelIdleScan;
 #ifdef FEATURE_WLAN_WAPI
@@ -763,9 +757,6 @@ typedef struct tagCsrScanStruct
     tDblLinkList scanCmdPendingList;
 #endif
     tCsrChannel occupiedChannels;   //This includes all channels on which candidate APs are found
-    tANI_S8     inScanResultBestAPRssi;
-
-    csrScanCompleteCallback callback11dScanDone;
 }tCsrScanStruct;
 
 #ifdef FEATURE_WLAN_TDLS_INTERNAL
@@ -892,11 +883,8 @@ typedef struct tagCsrRoamSession
     tANI_U32 nWapiRspIeLength;    //the byte count for pWapiRspIE
     tANI_U8 *pWapiRspIE;  //this contain the WAPI IE in beacon/probe rsp
 #endif /* FEATURE_WLAN_WAPI */
-    tANI_U32 nAddIEScanLength;  //length of addIeScan
-    /* This contains the additional IE in (unicast)
-     *  probe request at the time of join
-     */
-    tANI_U8 addIEScan[SIR_MAC_MAX_IE_LENGTH+2];
+    tANI_U32 nAddIEScanLength;  //the byte count of pAddIeScanIE;
+    tANI_U8 *pAddIEScan; //this contains the additional IE in (unicast) probe request at the time of join
     tANI_U32 nAddIEAssocLength;      //the byte count for pAddIeAssocIE
     tANI_U8 *pAddIEAssoc; //this contains the additional IE in (re) assoc request
 
@@ -919,8 +907,6 @@ typedef struct tagCsrRoamSession
     tBkidCandidateInfo BkidCandidateInfo[CSR_MAX_BKID_ALLOWED];
 #endif
     tANI_BOOLEAN fWMMConnection;
-    tANI_BOOLEAN fQOSConnection;
-
 #ifdef FEATURE_WLAN_BTAMP_UT_RF
     //To retry a join later when it fails if so desired
     tPalTimerHandle hTimerJoinRetry;
@@ -995,7 +981,6 @@ typedef struct tagCsrRoamStruct
     tANI_U8        RoamRssiDiff;
     tANI_BOOLEAN   isWESModeEnabled;
 #endif
-    tANI_U32 deauthRspStatus;
 }tCsrRoamStruct;
 
 
@@ -1124,7 +1109,6 @@ void csrScanSuspendIMPS( tpAniSirGlobal pMac );
 void csrScanResumeIMPS( tpAniSirGlobal pMac );
 
 eHalStatus csrInitGetChannels(tpAniSirGlobal pMac);
-eHalStatus csrScanFilterResults(tpAniSirGlobal pMac);
 
 eHalStatus csrSetModifyProfileFields(tpAniSirGlobal pMac, tANI_U32 sessionId,
                                      tCsrRoamModifyProfileFields *pModifyProfileFields);

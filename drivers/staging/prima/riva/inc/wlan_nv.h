@@ -98,6 +98,15 @@ typedef enum
 #define WLAN_NV_VERSION     NV_VERSION_11N_11AC_FW_CONFIG
 #endif //WCN_PRONTO
 
+typedef PACKED_PRE struct PACKED_POST
+{
+    uint8   macAddr1[NV_FIELD_MAC_ADDR_SIZE];
+    uint8   macAddr2[NV_FIELD_MAC_ADDR_SIZE];
+    uint8   macAddr3[NV_FIELD_MAC_ADDR_SIZE];
+    uint8   macAddr4[NV_FIELD_MAC_ADDR_SIZE];
+}sMacAddr;
+
+
 typedef PACKED_PRE union PACKED_POST
 {
     //common NV fields
@@ -106,10 +115,7 @@ typedef PACKED_PRE union PACKED_POST
     uint8   wlanNvRevId;
     uint8   numOfTxChains;
     uint8   numOfRxChains;
-    uint8   macAddr[NV_FIELD_MAC_ADDR_SIZE];   /* Default, not change name for compatibility */
-    uint8   macAddr2[NV_FIELD_MAC_ADDR_SIZE];
-    uint8   macAddr3[NV_FIELD_MAC_ADDR_SIZE];
-    uint8   macAddr4[NV_FIELD_MAC_ADDR_SIZE];
+    sMacAddr macAddr;
     uint8   mfgSN[NV_FIELD_MFG_SN_SIZE];
     uint8   couplerType;
     uint8   nvVersion;
@@ -375,6 +381,11 @@ typedef enum
 #define HW_VAL_VALUES_VALID_TXBBF_SEL_9MHZ_MASK                     0x8
 #define HW_VAL_VALUES_VALID_CUSTOM_TCXO_REG8_MASK                   0x10
 #define HW_VAL_VALUES_VALID_CUSTOM_TCXO_REG9_MASK                   0x20
+
+
+#define HAL_PWR_SAVE_FW_BMPS_SLEEP_TIME_OVERHEADS_US                1400  //(2.4Ghz operation)
+#define HAL_PWR_SAVE_FW_BMPS_SLEEP_TIME_OVERHEADS_5GHZ_US           1400 //(5Ghz operation)
+#define HAL_PWR_SAVE_FW_BMPS_SLEEP_TIME_OVERHEADS_XPA_US            1600  //(xLNA operation)
 
 
 //From wlanfw/inc/halPhyCalMemory.h

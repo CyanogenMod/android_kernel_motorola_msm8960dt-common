@@ -92,8 +92,6 @@
 
 #define SME_INVALID_COUNTRY_CODE "XX"
 
-//Macro to disable split scan
-#define SME_DISABLE_SPLIT_SCAN   255
 /*-------------------------------------------------------------------------- 
   Type declarations
   ------------------------------------------------------------------------*/
@@ -441,17 +439,6 @@ eHalStatus sme_ScanGetResult(tHalHandle hHal, tANI_U8 sessionId, tCsrScanResultF
     \return eHalStatus     
   ---------------------------------------------------------------------------*/
 eHalStatus sme_ScanFlushResult(tHalHandle hHal, tANI_U8 sessionId);
-
-/*
- * ---------------------------------------------------------------------------
- *  \fn sme_FilterScanResults
- *  \brief a wrapper function to request CSR to filter the scan results based
- *   on valid chennel list.
- *  \return eHalStatus
- *---------------------------------------------------------------------------
- */
-eHalStatus sme_FilterScanResults(tHalHandle hHal, tANI_U8 sessionId);
-
 eHalStatus sme_ScanFlushP2PResult(tHalHandle hHal, tANI_U8 sessionId);
 
 /* ---------------------------------------------------------------------------
@@ -826,6 +813,25 @@ eHalStatus sme_CfgSetStr(tHalHandle hHal, tANI_U32 cfgId, tANI_U8 *pStr,
                          tANI_U32 length, tCcmCfgSetCallback callback, 
                          eAniBoolean toBeSaved) ;
 
+
+/* ---------------------------------------------------------------------------
+    \fn sme_GetModifyProfileFields
+    \brief HDD or SME - QOS calls this function to get the current values of 
+    connected profile fields, changing which can cause reassoc.
+    This function must be called after CFG is downloaded and STA is in connected
+    state. Also, make sure to call this function to get the current profile
+    fields before calling the reassoc. So that pModifyProfileFields will have
+    all the latest values plus the one(s) has been updated as part of reassoc
+    request.
+    \param pModifyProfileFields - pointer to the connected profile fields 
+    changing which can cause reassoc
+
+    \return eHalStatus     
+  -------------------------------------------------------------------------------*/
+eHalStatus sme_GetModifyProfileFields(tHalHandle hHal, tANI_U8 sessionId, 
+                                     tCsrRoamModifyProfileFields * pModifyProfileFields);
+
+
 /*--------------------------------------------------------------------------
     \fn sme_SetConfigPowerSave
     \brief  Wrapper fn to change power save configuration in SME (PMC) module.
@@ -1077,18 +1083,6 @@ extern eHalStatus sme_RequestStandby (
 extern eHalStatus sme_RegisterPowerSaveCheck (
    tHalHandle hHal, 
    tANI_BOOLEAN (*checkRoutine) (void *checkContext), void *checkContext);
-
-/* ---------------------------------------------------------------------------
-    \fn sme_Register11dScanDoneCallback
-    \brief  Register a routine of type csrScanCompleteCallback which is
-            called whenever an 11d scan is done
-    \param  hHal - The handle returned by macOpen.
-    \param  callback -  11d scan complete routine to be registered
-    \return eHalStatus
-  ---------------------------------------------------------------------------*/
-extern eHalStatus sme_Register11dScanDoneCallback (
-   tHalHandle hHal,
-   csrScanCompleteCallback);
 
 /* ---------------------------------------------------------------------------
     \fn sme_DeregisterPowerSaveCheck
@@ -1405,8 +1399,6 @@ typedef void ( *tSmeChangeCountryCallback)(void *pContext);
 
     \param pCountry New Country Code String
 
-    \param sendRegHint If we want to send reg hint to nl80211
-
     \return eHalStatus  SUCCESS.
 
                          FAILURE or RESOURCES  The API finished and failed.
@@ -1416,8 +1408,7 @@ eHalStatus sme_ChangeCountryCode( tHalHandle hHal,
                                   tSmeChangeCountryCallback callback,
                                   tANI_U8 *pCountry,
                                   void *pContext,
-                                  void* pVosContext,
-                                  tAniBool sendRegHint);
+                                  void* pVosContext );
 
 
 /* ---------------------------------------------------------------------------
@@ -1710,7 +1701,7 @@ eHalStatus sme_SetKeepAlive (tHalHandle hHal, tANI_U8 sessionId,
             VOS_STATUS_E_FAILURE - failure
             VOS_STATUS_SUCCESS  success
   ---------------------------------------------------------------------------*/
-eHalStatus sme_AbortMacScan(tHalHandle hHal, eCsrAbortReason reason);
+eHalStatus sme_AbortMacScan(tHalHandle hHal);
 
 /* ----------------------------------------------------------------------------
    \fn sme_GetOperationChannel
@@ -1896,7 +1887,7 @@ tANI_U8 sme_GetConcurrentOperationChannel( tHalHandle hHal );
             VOS_STATUS_E_FAILURE - failure
             VOS_STATUS_SUCCESS  success
   ---------------------------------------------------------------------------*/
-eHalStatus sme_AbortMacScan(tHalHandle hHal, eCsrAbortReason reason);
+eHalStatus sme_AbortMacScan(tHalHandle hHal);
 
 /* ---------------------------------------------------------------------------
     \fn sme_GetCfgValidChannels
@@ -1989,6 +1980,16 @@ eHalStatus sme_8023MulticastList(tHalHandle hHal, tANI_U8 sessionId, tpSirRcvFlt
   ---------------------------------------------------------------------------*/
 eHalStatus sme_ReceiveFilterSetFilter(tHalHandle hHal, tpSirRcvPktFilterCfgType pRcvPktFilterCfg,
                                            tANI_U8 sessionId);
+
+// IKJB42MAIN-1244, Motorola, a19091 -- BEGIN
+/* ---------------------------------------------------------------------------
+    \fn sme_ReceiveSetMcFilter
+    \brief  API to set Receive Packet Filter from ISR context
+    \param  tSirInvokeV6Filter - Receive Packet Filter callback param
+    \return eHalStatus
+  ---------------------------------------------------------------------------*/
+eHalStatus sme_ReceiveSetMcFilter(tSirInvokeV6Filter *filterConfig);
+// IKJB42MAIN-1244, Motorola, a19091 -- END
 
 /* ---------------------------------------------------------------------------
     \fn sme_GetFilterMatchCount
@@ -2506,6 +2507,19 @@ v_U16_t sme_getEmptyScanRefreshPeriod(tHalHandle hHal);
     -------------------------------------------------------------------------*/
 eHalStatus sme_UpdateEmptyScanRefreshPeriod(tHalHandle hHal, v_U16_t nEmptyScanRefreshPeriod);
 
+
+/* ---------------------------------------------------------------------------
+    \fn sme_UpdateEmptyScanMaxPeriod
+    \brief  Update nEmptyScanMaxPeriod
+            This function is called through dynamic setConfig callback function
+            to configure nEmptyScanMaxPeriod
+            Usage: adb shell iwpriv wlan0 setConfig nEmptyScanMaxPeriod=[300 .. 1200]
+    \param  hHal - HAL handle for device
+    \param  nEmptyScanMaxPeriod - emptyScan duration.
+    \- return Success or failure
+    -------------------------------------------------------------------------*/
+eHalStatus sme_UpdateEmptyScanMaxPeriod(tHalHandle hHal, v_U32_t nEmptyScanMaxPeriod);
+
 /* ---------------------------------------------------------------------------
     \fn sme_UpdateEmptyScanMaxPeriod
     \brief  Update nEmptyScanMaxPeriod
@@ -2716,26 +2730,14 @@ eHalStatus sme_UpdateRoamScanOffloadEnabled(tHalHandle hHal, v_BOOL_t nRoamScanO
 
 /* ---------------------------------------------------------------------------
     \fn sme_IsFeatureSupportedByFW
-    \brief  Check if a feature is enabled by FW
-
-    \param  featEnumValue - Enumeration value of the feature to be checked.
+    \brief  Check if an feature is enabled by FW
+            
+    \param  feattEnumValue - Enumeration value of the feature to be checked.
                 A value from enum placeHolderInCapBitmap
                               
     \- return 1/0 (TRUE/FALSE) 
     -------------------------------------------------------------------------*/
 tANI_U8 sme_IsFeatureSupportedByFW(tANI_U8 featEnumValue);
-
-/* ---------------------------------------------------------------------------
-    \fn sme_IsFeatureSupportedByDriver
-    \brief  Check if a feature is enabled by driver
-
-    \param  featEnumValue - Enumeration value of the feature to be checked.
-                A value from enum placeHolderInCapBitmap
-
-    \- return 1/0 (TRUE/FALSE)
-    -------------------------------------------------------------------------*/
-tANI_U8 sme_IsFeatureSupportedByDriver(tANI_U8 featEnumValue);
-
 #ifdef FEATURE_WLAN_TDLS
 /* ---------------------------------------------------------------------------
     \fn sme_SendTdlsMgmtFrame
@@ -2842,29 +2844,32 @@ eHalStatus sme_SetPhyMode(tHalHandle hHal, eCsrPhyMode phyMode);
   -------------------------------------------------------------------------------*/
 eCsrPhyMode sme_GetPhyMode(tHalHandle hHal);
 
-/*--------------------------------------------------------------------------
-  \brief sme_isSta_p2p_clientConnected() - a wrapper function to check if there
-                                           is any connected session .
-  This is a synchronous call
-  \param hHal - The handle returned by macOpen
-  \return VOS_STATUS - SME passed the request to CSR successfully.
-          Other status means SME is failed to send the request.
-  \sa
-  --------------------------------------------------------------------------*/
+/*
+ * sme API to find if any infra station or P2P-Client is connected
+ * return status
+*/
 VOS_STATUS sme_isSta_p2p_clientConnected(tHalHandle hHal);
 
-/*--------------------------------------------------------------------------
-  \brief sme_enable_disable_split_scan() - a wrapper function to set the split
-                                          scan parameter.
-  This is a synchronous call
-  \param hHal - The handle returned by macOpen
-  \return None.
-  \sa
-  --------------------------------------------------------------------------*/
-void sme_enable_disable_split_scan (tHalHandle hHal, tANI_U8 nNumStaChan,
-                                    tANI_U8 nNumP2PChan);
+/*----------------------------------------------------------------------------
 
-void smeGetCommandQStatus( tHalHandle hHal );
+  \brief sme_isHostFeatSupported() - SME interface to determine the given feature
+   is supported by HOST or not.
 
-eHalStatus sme_RoamDelPMKIDfromCache( tHalHandle hHal, tANI_U8 sessionId, tANI_U8 *pBSSId );
+  \param featCap - Feature support
+
+  \return 1 on feature supported, 0 on feature not supported.
+-----------------------------------------------------------------------------*/
+tANI_U8 sme_isHostFeatSupported(tANI_U8 featCap);
+
+/*----------------------------------------------------------------------------
+
+  \brief sme_isFwFeatureSupported() - SME interface to determine the given feature
+   is supported by HOST or not.
+
+  \param featCap - Feature support
+
+  \return 1 on feature supported, 0 on feature not supported.
+-----------------------------------------------------------------------------*/
+tANI_U8 sme_isFwFeatSupported(tANI_U8 featCap);
+
 #endif //#if !defined( __SME_API_H )

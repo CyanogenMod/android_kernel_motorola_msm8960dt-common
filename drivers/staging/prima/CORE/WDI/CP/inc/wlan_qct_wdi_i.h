@@ -1059,8 +1059,6 @@ typedef struct
   DXE when DXE wakes up from power save*/
   unsigned int                dxePhyAddr;
 
-  wpt_boolean                 dxeRingsEmpty;
-
   /*NV download request parameters  */
   WDI_NvDownloadReqParamsType   wdiCachedNvDownloadReq;
 
@@ -4407,7 +4405,7 @@ WDI_RXMsgCTSCB
  @see
  @return Result of the function call
 */
-WDI_Status
+WPT_INLINE WDI_Status   // Motorola IKJB42MAIN-4103, are002, match instantiation
 WDI_ProcessResponse
 (
   WDI_ControlBlockType*  pWDICtx,
