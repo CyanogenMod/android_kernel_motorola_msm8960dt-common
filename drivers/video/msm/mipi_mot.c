@@ -485,7 +485,6 @@ static int panel_enable(struct platform_device *pdev)
 	if (mot_panel.panel_enable_wa)
 		mot_panel.panel_enable_wa(mfd);
 
-	mipi_set_tx_power_mode(0);
 	get_manufacture_id(mfd);
 	get_controller_ver(mfd);
 	get_controller_drv_ver(mfd);
