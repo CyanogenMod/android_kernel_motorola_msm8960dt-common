@@ -551,6 +551,7 @@ static int __init mipi_video_mot_hd_pt_init(void)
 	mot_panel->set_backlight = panel_set_backlight;
 	mot_panel->panel_off = panel_disable;
 	mot_panel->exit_sleep_wait = 20;
+	mot_panel->exit_sleep_panel_on_wait = 140;
 
 	atomic_set(&mot_panel->state, MOT_PANEL_ON);
 
