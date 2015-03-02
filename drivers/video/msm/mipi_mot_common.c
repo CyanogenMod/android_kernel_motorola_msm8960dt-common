@@ -138,7 +138,6 @@ int mipi_mot_panel_on(struct msm_fb_data_type *mfd)
 	u8 failures = 0;
 
 	mipi_mot_exit_sleep_wait();
-	mipi_set_tx_power_mode(0);
 
 	mmi_panel_notify(MMI_PANEL_EVENT_POST_INIT, NULL);
 	pr_info("%s: sending display on\n", __func__);
