@@ -39,11 +39,6 @@
 #include "ion_priv.h"
 #define DEBUG
 
-/* The number of times we should retry the dumping of the debug buffers
- * before simply skipping the problem client
- */
-#define ION_DEBUG_LOCK_RETRIES     5
-
 /**
  * struct ion_device - the metadata of the ion device node
  * @dev:		the actual misc device
@@ -1444,15 +1439,13 @@ static const struct file_operations ion_fops = {
 	.unlocked_ioctl = ion_ioctl,
 };
 
-static ssize_t ion_debug_heap_total(struct ion_client *client,
+static size_t ion_debug_heap_total(struct ion_client *client,
 				   enum ion_heap_ids id)
 {
-	ssize_t size = 0;
+	size_t size = 0;
 	struct rb_node *n;
 
-	if (!mutex_trylock(&client->lock))
-		return -EBUSY;
-
+	mutex_lock(&client->lock);
 	for (n = rb_first(&client->handles); n; n = rb_next(n)) {
 		struct ion_handle *handle = rb_entry(n,
 						     struct ion_handle,
@@ -1607,12 +1600,6 @@ static int ion_debug_heap_show(struct seq_file *s, void *unused)
 	struct ion_heap *heap = s->private;
 	struct ion_device *dev = heap->dev;
 	struct rb_node *n;
-	unsigned retries = 0;
-
-retry:
-	/* If we are re-trying, reset the seq_file buffer.... */
-	if (retries)
-		s->count = 0;
 
 	mutex_lock(&dev->lock);
 	seq_printf(s, "%16.s %16.s %16.s\n", "client", "pid", "size");
@@ -1620,17 +1607,7 @@ retry:
 	for (n = rb_first(&dev->clients); n; n = rb_next(n)) {
 		struct ion_client *client = rb_entry(n, struct ion_client,
 						     node);
-		ssize_t size = ion_debug_heap_total(client, heap->id);
-
-		if (size < 0) {
-			if (retries++ >= ION_DEBUG_LOCK_RETRIES) {
-				seq_printf(s, "Couldn't get client lock...\n");
-				continue;
-			}
-			mutex_unlock(&dev->lock);
-			goto retry;
-		}
-
+		size_t size = ion_debug_heap_total(client, heap->id);
 		if (!size)
 			continue;
 		if (client->task) {
@@ -1758,12 +1735,6 @@ static int ion_debug_leak_show(struct seq_file *s, void *unused)
 	struct ion_device *dev = s->private;
 	struct rb_node *n;
 	struct rb_node *n2;
-	unsigned retries = 0;
-
-retry:
-	/* If we are re-trying, reset the seq_file buffer.... */
-	if (retries)
-		s->count = 0;
 
 	/* mark all buffers as 1 */
 	seq_printf(s, "%16.s %16.s %16.s %16.s\n", "buffer", "heap", "size",
@@ -1781,15 +1752,7 @@ retry:
 		struct ion_client *client = rb_entry(n, struct ion_client,
 						     node);
 
-		if (!mutex_trylock(&client->lock)) {
-			if (retries++ >= ION_DEBUG_LOCK_RETRIES) {
-				seq_printf(s, "Couldn't get client lock...\n");
-				continue;
-			}
-			mutex_unlock(&dev->lock);
-			goto retry;
-		}
-
+		mutex_lock(&client->lock);
 		for (n2 = rb_first(&client->handles); n2; n2 = rb_next(n2)) {
 			struct ion_handle *handle = rb_entry(n2,
 						struct ion_handle, node);
