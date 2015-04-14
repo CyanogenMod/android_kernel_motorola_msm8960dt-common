@@ -93,8 +93,7 @@ static int pm8xxx_rgb_blink_set(struct pm8xxx_rgb_led_drv_data *drv_data,
 			drv_data->leds[i].blinking = 0;
 			if (drv_data->leds[i].cdev.brightness) {
 				ret = pwm_config(drv_data->leds[i].pwm,
-					PM8XXX_PWM_PERIOD_MAX,
-					PM8XXX_PWM_PERIOD_MAX);
+					1000 * drv_data->leds[i].value / LED_FULL, 1000);
 				if (ret)
 					pr_err("%s: pwm_config err %d\n",
 						__func__, ret);
