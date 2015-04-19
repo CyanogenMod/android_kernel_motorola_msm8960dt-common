@@ -774,7 +774,7 @@ static void timekeeping_resume(void)
 
 		ts_delta = ns_to_timespec(nsec);
 		suspendtime_found = true;
-	else if (timespec_compare(&ts_new, &timekeeping_suspend_time) > 0) {
+	} else if (timespec_compare(&ts_new, &timekeeping_suspend_time) > 0) {
 		ts_delta = timespec_sub(ts_new, timekeeping_suspend_time);
 		suspendtime_found = true;
 	}
