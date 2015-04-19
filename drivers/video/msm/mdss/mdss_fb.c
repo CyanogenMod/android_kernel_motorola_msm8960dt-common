@@ -436,16 +436,18 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 {
 	struct mdss_panel_data *pdata;
 
-	if (unset_bl_level && !bl_updated) {
-		pdata = dev_get_platdata(&mfd->pdev->dev);
-		if ((pdata) && (pdata->set_backlight)) {
-			mutex_lock(&mfd->lock);
-			mfd->bl_level = unset_bl_level;
-			pdata->set_backlight(mfd->bl_level);
-			bl_level_old = unset_bl_level;
-			mutex_unlock(&mfd->lock);
-			bl_updated = 1;
+	if (mfd->unset_bl_level) {
+		mutex_lock(&mfd->bl_lock);
+		if (!mfd->bl_updated) {
+			pdata = dev_get_platdata(&mfd->pdev->dev);
+			if ((pdata) && (pdata->set_backlight)) {
+				mfd->bl_level = mfd->unset_bl_level;
+				pdata->set_backlight(pdata, mfd->bl_level);
+				mfd->bl_level_scaled = mfd->unset_bl_level;
+				mfd->bl_updated = 1;
+			}
 		}
+		mutex_unlock(&mfd->bl_lock);
 	}
 }
 
