@@ -33,17 +33,6 @@
 		      <0x02002000 0x1000>;
 	};
 
-	timer@200a000 {
-		compatible = "qcom,kpss-timer", "qcom,msm-timer";
-		interrupts = <1 1 0x301>,
-			     <1 2 0x301>,
-			     <1 3 0x301>;
-		reg = <0x0200a000 0x100>;
-		clock-frequency = <27000000>,
-				  <32768>;
-		cpu-offset = <0x80000>;
-	}
-
 	msmgpio: gpio@801000 {
 		compatible = "qcom,msm-gpio";
 		gpio-controller;
@@ -51,20 +40,6 @@
 		interrupt-controller;
 		#interrupt-cells = <2>;
 		reg = <0x801000 0x4000>;
-	};
-
-	gcc: clock-controller@900000 {
-		compatible = "qcom,gcc-msm8960";
-		#clock-cells = <1>;
-		#reset-cells = <1>;
-		reg = <0x900000 0x4000>;
-	};
-
-	clock-controller@4000000 {
-		compatible = "qcom,mmcc-msm8960";
-		reg = <0x4000000 0x1000>;
-		#clock-cells = <1>;
-		#reset-cells = <1>;
 	};
 
 	/* GSBI 3 - I2C Port */
@@ -195,9 +170,4 @@
 		qcom,msm-hs-dm-rx-crci = <9>;
 	};
 
-	qcom,ssbi@500000 {
-		compatible = "qcom,ssbi";
-		reg = <0x500000 0x1000>;
-		qcom,controller-type = "pmic-arbiter";
-	};
 };
