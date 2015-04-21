@@ -223,7 +223,7 @@ void lp8556_brightness_set(struct led_classdev *led_dev,
 	pr_debug("%s: %d\n", __func__, brightness);
 
 	if (!led_data->suspended)
-		queue_work(system_nrt_wq, &led_data->work);
+		schedule_work(&led_data->work);
 }
 EXPORT_SYMBOL(lp8556_brightness_set);
 
@@ -235,7 +235,7 @@ static int lp8556_update_brightness(struct backlight_device *bl_dev)
 
 	led_data->led_dev.brightness = bl_dev->props.brightness;
 	if (!led_data->suspended)
-		queue_work(system_nrt_wq, &led_data->work);
+		schedule_work(&led_data->work);
 
 	return 0;
 }
@@ -412,7 +412,7 @@ static void lp8556_late_resume(struct early_suspend *h)
 	struct lp8556_data *led_data =
 		container_of(h, struct lp8556_data, early_suspender);
 	led_data->suspended = false;
-	queue_work(system_nrt_wq, &led_data->work);
+	schedule_work(&led_data->work);
 }
 #endif
 
