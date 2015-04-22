@@ -391,12 +391,14 @@ static void bluesleep_stop(void)
 
 	if (test_bit(BT_ASLEEP, &flags)) {
 		clear_bit(BT_ASLEEP, &flags);
+		spin_unlock_irqrestore(&rw_lock, irq_flags);
 		hsuart_power(1);
+	} else {
+		spin_unlock_irqrestore(&rw_lock, irq_flags);
 	}
 
 	atomic_inc(&open_count);
 
-	spin_unlock_irqrestore(&rw_lock, irq_flags);
 	if (disable_irq_wake(bsi->host_wake_irq))
 		BT_ERR("Couldn't disable hostwake IRQ wakeup mode\n");
 	free_irq(bsi->host_wake_irq, NULL);
