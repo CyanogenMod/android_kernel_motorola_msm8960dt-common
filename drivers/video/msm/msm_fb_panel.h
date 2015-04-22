@@ -175,8 +175,6 @@ struct msm_panel_info {
 	__u32 col_align;
 
 	__u32 frame_interval;
-	__u32 height;
-	__u32 width;
 	__u32 physical_width_mm;
 	__u32 physical_height_mm;
 
