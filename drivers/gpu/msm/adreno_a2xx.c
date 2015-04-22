@@ -2089,6 +2089,8 @@ static void a2xx_start(struct adreno_device *adreno_dev)
 	adreno_regwrite(device, REG_SQ_INT_CNTL, 0);
 
 	a2xx_gmeminit(adreno_dev);
+
+	kgsl_regwrite(device, REG_CP_DEBUG, A2XX_CP_DEBUG_DEFAULT);
 }
 
 /* Defined in adreno_a2xx_snapshot.c */
