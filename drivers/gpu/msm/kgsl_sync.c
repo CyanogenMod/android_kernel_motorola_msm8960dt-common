@@ -96,6 +96,37 @@ static inline void kgsl_fence_event_cb(struct kgsl_device *device,
 	kfree(ev);
 }
 
+static int _add_fence_event(struct kgsl_device *device,
+	struct kgsl_context *context, unsigned int timestamp)
+{
+	struct kgsl_fence_event_priv *event;
+	int ret;
+
+	event = kmalloc(sizeof(*event), GFP_KERNEL);
+	if (event == NULL)
+		return -ENOMEM;
+
+	/*
+	 * Increase the refcount for the context to keep it through the
+	 * callback
+	 */
+
+	_kgsl_context_get(context);
+
+	event->context = context;
+	event->timestamp = timestamp;
+
+	ret = kgsl_add_event(device, context->id, timestamp,
+		kgsl_fence_event_cb, event, context->dev_priv);
+
+	if (ret) {
+		kgsl_context_put(context);
+		kfree(event);
+	}
+
+	return ret;
+}
+
 /**
  * kgsl_add_fence_event - Create a new fence event
  * @device - KGSL device to create the event on
@@ -113,29 +144,21 @@ int kgsl_add_fence_event(struct kgsl_device *device,
 	u32 context_id, u32 timestamp, void __user *data, int len,
 	struct kgsl_device_private *owner)
 {
-	struct kgsl_fence_event_priv *event;
 	struct kgsl_timestamp_event_fence priv;
 	struct kgsl_context *context;
 	struct sync_pt *pt;
 	struct sync_fence *fence = NULL;
 	int ret = -EINVAL;
+	unsigned int cur;
 
 	if (len != sizeof(priv))
 		return -EINVAL;
 
-	event = kzalloc(sizeof(*event), GFP_KERNEL);
-	if (event == NULL)
-		return -ENOMEM;
-
 	context = kgsl_context_get_owner(owner, context_id);
 
 	if (context == NULL) {
-		kfree(event);
 		return -EINVAL;
 	}
-
-	event->context = context;
-	event->timestamp = timestamp;
 
 	pt = kgsl_sync_pt_create(context->timeline, timestamp);
 	if (pt == NULL) {
@@ -161,19 +184,28 @@ int kgsl_add_fence_event(struct kgsl_device *device,
 	}
 	sync_fence_install(fence, priv.fence_fd);
 
+	/*
+	 * If the timestamp hasn't expired yet create an event to trigger it.
+	 * Otherwise, just signal the fence - there is no reason to go through
+	 * the effort of creating a fence we don't need.
+	 */
+
+	cur = kgsl_readtimestamp(device, context, KGSL_TIMESTAMP_RETIRED);
+
+	if (timestamp_cmp(cur, timestamp) >= 0)
+		kgsl_sync_timeline_signal(context->timeline, cur);
+	else {
+		ret = _add_fence_event(device, context, timestamp);
+		if (ret)
+			goto fail_event;
+	}
+
+	kgsl_context_put(context);
+
 	if (copy_to_user(data, &priv, sizeof(priv))) {
 		ret = -EFAULT;
 		goto fail_copy_fd;
 	}
-
-	/*
-	 * Hold the context ref-count for the event - it will get released in
-	 * the callback
-	 */
-	ret = kgsl_add_event(device, context_id, timestamp,
-			kgsl_fence_event_cb, event, owner);
-	if (ret)
-		goto fail_event;
 
 	return 0;
 
@@ -187,7 +219,6 @@ fail_fd:
 fail_fence:
 fail_pt:
 	kgsl_context_put(context);
-	kfree(event);
 	return ret;
 }
 
