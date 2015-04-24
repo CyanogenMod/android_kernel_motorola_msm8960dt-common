@@ -63,7 +63,7 @@ static spinlock_t speedchange_cpumask_lock;
 static struct mutex gov_lock;
 
 /* Hi speed to bump to from lo speed when load burst (default max) */
-static unsigned int hispeed_freq;
+static u64 hispeed_freq;
 
 /* Go to hi speed when CPU load at or above this value. */
 #define DEFAULT_GO_HISPEED_LOAD 85
@@ -202,7 +202,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 			}
 		}
 	} else {
-		new_freq = hispeed_freq * cpu_load / target_load;
+		new_freq = pcpu->policy->cur * cpu_load / target_load;
 	}
 
 	if (new_freq <= hispeed_freq)
@@ -574,7 +574,7 @@ static struct global_attr target_load_attr =
 static ssize_t show_hispeed_freq(struct kobject *kobj,
 				 struct attribute *attr, char *buf)
 {
-	return sprintf(buf, "%u\n", hispeed_freq);
+	return sprintf(buf, "%llu\n", hispeed_freq);
 }
 
 static ssize_t store_hispeed_freq(struct kobject *kobj,
@@ -582,9 +582,9 @@ static ssize_t store_hispeed_freq(struct kobject *kobj,
 				  size_t count)
 {
 	int ret;
-	long unsigned int val;
+	u64 val;
 
-	ret = strict_strtoul(buf, 0, &val);
+	ret = strict_strtoull(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 	hispeed_freq = val;
