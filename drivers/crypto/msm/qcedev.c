@@ -974,6 +974,11 @@ static int qcedev_sha_final(struct qcedev_async_req *qcedev_areq,
 		return -EINVAL;
 	}
 
+	if (handle->sha_ctxt.trailing_buf_len == 0) {
+		pr_err("%s Incorrect trailng buffer %d\n", __func__,
+					handle->sha_ctxt.trailing_buf_len);
+		return -EINVAL;
+	}
 	handle->sha_ctxt.last_blk = 1;
 
 	total = handle->sha_ctxt.trailing_buf_len;
@@ -1904,11 +1909,8 @@ static int qcedev_check_sha_params(struct qcedev_sha_op_req *req,
 				(!podev->ce_support.cmac))
 		goto sha_error;
 
-	if ((!req->entries) || (req->entries > QCEDEV_MAX_BUFFERS)) {
-		pr_err("%s: Invalid num entries (%d)\n",
-			__func__, req->entries);
+	if ((req->entries == 0) || (req->data_len == 0))
 		goto sha_error;
-	}
 
 	if (req->alg >= QCEDEV_ALG_SHA_ALG_LAST)
 		goto sha_error;
