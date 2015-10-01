@@ -271,4 +271,5 @@ int msm_fb_pan_display_ex(struct fb_info *info,
 int msmfb_overlay_play_sub(struct fb_info *info,
 	struct msmfb_overlay_data *req);
 
+void mdp_restore_rgb(void);
 #endif /* MSM_FB_H */
